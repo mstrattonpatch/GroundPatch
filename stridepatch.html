@@ -290,6 +290,14 @@
       </section>
     </div>
 
+    <section>
+      <h2>Debug log</h2>
+      <p style="font-size:11px;color:var(--ink-soft);margin:0 0 8px;">Every Overpass query and its exact response/error — copy this and paste it back rather than transcribing an error card by hand.</p>
+      <button class="secondary" id="copyDebugLog" style="margin-bottom:8px;">Copy log</button>
+      <button class="secondary" id="clearDebugLog" style="margin-bottom:8px;">Clear</button>
+      <pre id="debugLog" class="mono" style="background:#fff;border:1px solid var(--line);border-radius:2px;padding:8px;font-size:10.5px;line-height:1.5;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+    </section>
+
   </div>
 </div>
 
@@ -582,13 +590,37 @@ function ringToOverpassPoly(ring){
 // (which fetch() doesn't add by default, unlike a browser's own navigation).
 const OVERPASS_PER_ENDPOINT_TIMEOUT_MS = 20000;
 
+/* =========================================================
+   Debug log — every Overpass query and its exact response/error,
+   visible in the sidebar and copyable as plain text, so a failure
+   can be pasted back verbatim instead of retyped from an error card.
+========================================================= */
+function debugLog(line){
+  const el = document.getElementById('debugLog');
+  const stamp = new Date().toLocaleTimeString();
+  el.textContent += `[${stamp}] ${line}\n\n`;
+  el.scrollTop = el.scrollHeight;
+}
+document.getElementById('copyDebugLog').addEventListener('click', ()=>{
+  navigator.clipboard.writeText(document.getElementById('debugLog').textContent);
+  const btn = document.getElementById('copyDebugLog');
+  const original = btn.textContent;
+  btn.textContent = 'Copied';
+  setTimeout(()=> btn.textContent = original, 1200);
+});
+document.getElementById('clearDebugLog').addEventListener('click', ()=>{
+  document.getElementById('debugLog').textContent = '';
+});
+
 async function postOverpassQuery(query){
   const attempts = [];
   for(const endpoint of OVERPASS_ENDPOINTS){
+    const proxiedUrl = withProxy(endpoint);
+    debugLog(`REQUEST → ${proxiedUrl}\nQUERY:\n${query}`);
     const controller = new AbortController();
     const timer = setTimeout(()=> controller.abort(), OVERPASS_PER_ENDPOINT_TIMEOUT_MS);
     try{
-      const resp = await fetch(withProxy(endpoint), {
+      const resp = await fetch(proxiedUrl, {
         method:'POST',
         headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
         body: 'data=' + encodeURIComponent(query),
@@ -598,9 +630,16 @@ async function postOverpassQuery(query){
         const bodyText = await resp.text().catch(()=> '');
         throw new Error(`HTTP ${resp.status}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,200) : ''}`);
       }
-      return await resp.json();
+      const json = await resp.json();
+      debugLog(`RESPONSE ← ${endpoint}\nHTTP ${resp.status} OK — ${(json.elements||[]).length} element(s)`);
+      return json;
     }catch(err){
+      // Covers all three failure modes: HTTP error status (thrown above),
+      // AbortError (per-endpoint timeout), and a network-level failure
+      // (e.g. "Failed to fetch") that never reaches a response at all —
+      // every one of them gets logged here, not just a subset.
       const msg = err.name === 'AbortError' ? `timed out after ${OVERPASS_PER_ENDPOINT_TIMEOUT_MS/1000}s` : err.message;
+      debugLog(`RESPONSE ← ${endpoint}\n${msg}`);
       attempts.push(`${endpoint}: ${msg}`);
       console.warn(`Overpass endpoint ${endpoint} failed, trying next.`, err);
     }finally{
