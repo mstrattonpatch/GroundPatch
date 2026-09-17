@@ -873,12 +873,18 @@ function arcgisFetchJSON(url){
   });
 }
 
+// LotSearch/0 is EPICDB.sde.DCDB_DELIVERY_LOTTAG_XY_V — another Oracle SDE view
+// (same "_V" tell as ADDRESSSTRING_V), which throws "Failed to execute query"
+// for a bare column name in the WHERE clause the same way the address layer did.
+const LOT_TABLE = 'EPICDB.sde.DCDB_DELIVERY_LOTTAG_XY_V';
+function lotField(name){ return `${LOT_TABLE}.${name}`; }
+
 async function fetchLotByPlanLabel(input){
   const cleaned = input.replace(/\s+/g, '').toUpperCase().replace(/'/g, "''");
   const params = new URLSearchParams({
     f:'geojson',
-    where:`LOT_DP LIKE '${cleaned}%'`,
-    outFields:'LOT_DP',
+    where:`${lotField('LOT_DP')} LIKE '${cleaned}%'`,
+    outFields:'*',
     returnGeometry:'true',
     outSR:'4326',
     resultRecordCount:'6'
@@ -887,7 +893,7 @@ async function fetchLotByPlanLabel(input){
   const feats = gj.features || [];
   if(feats.length === 0) throw new Error(`No lot found matching "${input}". Check the Lot/DP format (e.g. 1/DP709613).`);
   if(feats.length > 1){
-    const labels = feats.map(f => f.properties.LOT_DP).join(', ');
+    const labels = feats.map(f => pickField(f.properties, 'LOT_DP')).join(', ');
     throw new Error(`Multiple lots matched — be more specific: ${labels}`);
   }
   return feats[0].geometry;
@@ -901,7 +907,7 @@ async function fetchLotByPlanLabel(input){
    into its own HOUSENUMBERFIRST = ... clause rather than matching it as text. */
 const ADDR_TABLE = 'GURAS_DELIVERY.sde.ADDRESSSTRING_V';
 function addrField(name){ return `${ADDR_TABLE}.${name}`; }
-function pickAddrField(props, name){
+function pickField(props, name){
   if(props[name] !== undefined) return props[name];
   const key = Object.keys(props).find(k => k.toUpperCase().endsWith('.' + name.toUpperCase()));
   return key ? props[key] : undefined;
@@ -930,7 +936,7 @@ async function fetchAddressSuggestions(text, limit){
   });
   const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
   return (gj.features || []).map(f => ({
-    label: [pickAddrField(f.properties, 'HOUSENUMBERFIRST'), pickAddrField(f.properties, 'ROADSUBURB')].filter(Boolean).join(' '),
+    label: [pickField(f.properties, 'HOUSENUMBERFIRST'), pickField(f.properties, 'ROADSUBURB')].filter(Boolean).join(' '),
     point: f.geometry
   }));
 }
@@ -947,7 +953,7 @@ async function geocodeAddress(input){
   const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
   const feats = gj.features || [];
   if(feats.length === 0) throw new Error(`No address found matching "${input}".`);
-  const matchedAddress = [pickAddrField(feats[0].properties, 'HOUSENUMBERFIRST'), pickAddrField(feats[0].properties, 'ROADSUBURB')].filter(Boolean).join(' ');
+  const matchedAddress = [pickField(feats[0].properties, 'HOUSENUMBERFIRST'), pickField(feats[0].properties, 'ROADSUBURB')].filter(Boolean).join(' ');
   return { point: feats[0].geometry, matchedAddress, count: feats.length };
 }
 
