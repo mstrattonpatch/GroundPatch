@@ -875,13 +875,19 @@ function arcgisFetchJSON(url){
 
 async function fetchLotByPlanLabel(input){
   const cleaned = input.replace(/\s+/g, '').toUpperCase().replace(/'/g, "''");
+  // LOT_DP values are always "<lot>/DP<plan>" (e.g. "1/DP709613") — a lot number
+  // is given, so match it as a prefix; a bare plan number ("DP1174562", no "/")
+  // never appears at the start of a real value, so match it as a suffix instead
+  // to find whichever lot(s) belong to that plan.
+  const hasLotNumber = cleaned.includes('/');
+  const where = hasLotNumber ? `LOT_DP LIKE '${cleaned}%'` : `LOT_DP LIKE '%${cleaned}'`;
   const params = new URLSearchParams({
     f:'geojson',
-    where:`LOT_DP LIKE '${cleaned}%'`, // this layer's own metadata lists LOT_DP as a plain (unqualified) field name — unlike the joined Address Point layer, qualifying it here is wrong
+    where, // this layer's own metadata lists LOT_DP as a plain (unqualified) field name — unlike the joined Address Point layer, qualifying it here is wrong
     outFields:'*',
     returnGeometry:'true',
     outSR:'4326',
-    resultRecordCount:'6'
+    resultRecordCount: hasLotNumber ? '6' : '50'
   });
   let gj;
   try{
