@@ -947,7 +947,11 @@ async function geocodeAddress(input){
 }
 
 async function fetchLotContainingPoint(pointGeom){
-  const esriPt = { x: pointGeom.coordinates[0], y: pointGeom.coordinates[1], spatialReference:{ wkid:4326 } };
+  // Address Point (layer 10) is geometryType esriGeometryMultipoint, so its GeoJSON
+  // coordinates nest one level deeper than a plain Point: [[lon, lat, z]] rather
+  // than [lon, lat] — unwrap that before building the Esri point geometry.
+  const [lon, lat] = pointGeom.type === 'MultiPoint' ? pointGeom.coordinates[0] : pointGeom.coordinates;
+  const esriPt = { x: lon, y: lat, spatialReference:{ wkid:4326 } };
   const params = new URLSearchParams({
     f:'geojson',
     geometry: JSON.stringify(esriPt),
