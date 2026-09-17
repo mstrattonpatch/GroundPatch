@@ -875,19 +875,22 @@ function arcgisFetchJSON(url){
 
 async function fetchLotByPlanLabel(input){
   const cleaned = input.replace(/\s+/g, '').toUpperCase().replace(/'/g, "''");
-  // LOT_DP values are always "<lot>/DP<plan>" (e.g. "1/DP709613") — a lot number
-  // is given, so match it as a prefix; a bare plan number ("DP1174562", no "/")
-  // never appears at the start of a real value, so match it as a suffix instead
-  // to find whichever lot(s) belong to that plan.
-  const hasLotNumber = cleaned.includes('/');
-  const where = hasLotNumber ? `LOT_DP LIKE '${cleaned}%'` : `LOT_DP LIKE '%${cleaned}'`;
+  // LOT_DP stores just digits, e.g. "1/1174562" — confirmed against the live
+  // service — not "1/DP1174562" as the user-facing "DP"/"SP" label suggests
+  // (that letter prefix only lives in PLANLABEL/TAG). Strip it before querying.
+  // When a lot number is given, match lot+plan as a prefix; a bare plan number
+  // ("DP1174562", no "/") is matched as a suffix to find whichever lot(s) are on it.
+  const parts = cleaned.split('/');
+  const planNumber = parts[parts.length - 1].replace(/^(DP|SP)/, '');
+  const lotNumber = parts.length > 1 ? parts[0] : null;
+  const where = lotNumber ? `LOT_DP LIKE '${lotNumber}/${planNumber}%'` : `LOT_DP LIKE '%/${planNumber}'`;
   const params = new URLSearchParams({
     f:'geojson',
     where, // this layer's own metadata lists LOT_DP as a plain (unqualified) field name — unlike the joined Address Point layer, qualifying it here is wrong
     outFields:'*',
     returnGeometry:'true',
     outSR:'4326',
-    resultRecordCount: hasLotNumber ? '6' : '50'
+    resultRecordCount: lotNumber ? '6' : '50'
   });
   let gj;
   try{
