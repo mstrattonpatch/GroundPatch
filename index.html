@@ -683,7 +683,9 @@ let layers = [
   { name:"Riparian Buffer (Strahler)", cat:"ecology", color:"#7EC3E0", noCategorize:true,
     derived:true, sourceLayer:"Strahler Stream Order", on:true },
   { name:"IBRA Subregions", cat:"ecology", color:"#7A5C8E", field:"SUB_NAME_7",
-    url:"https://gis.environment.gov.au/gispubmap/rest/services/ogc_services/IBRA7_Subregions/MapServer", id:0, on:true }
+    url:"https://gis.environment.gov.au/gispubmap/rest/services/ogc_services/IBRA7_Subregions/MapServer", id:0, on:true },
+  { name:"Points of Interest", cat:"context", color:"#5B7C99", bufferKm:CONTEXT_BUFFER_KM, field:"poitype",
+    url:"https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_POI/MapServer", id:0, on:true }
 ];
 
 // Strahler order -> riparian buffer width in metres, per the team's standard:
