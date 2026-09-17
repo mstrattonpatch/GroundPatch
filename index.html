@@ -883,7 +883,18 @@ async function fetchLotByPlanLabel(input){
     outSR:'4326',
     resultRecordCount:'6'
   });
-  const gj = await arcgisFetchJSON(withProxy(`${LOT_SEARCH_URL}/0/query?${params.toString()}`));
+  let gj;
+  try{
+    gj = await arcgisFetchJSON(withProxy(`${LOT_SEARCH_URL}/0/query?${params.toString()}`));
+  }catch(err){
+    // Confirmed against the live service: the same WHERE clause with f=json returns
+    // a clean empty features:[] when nothing matches, but this ArcGIS Server throws
+    // a generic "Failed to execute query" instead of an empty FeatureCollection when
+    // the f=geojson output has zero results. Treat that specific error as "no match"
+    // rather than a hard failure — anything else still propagates as a real error.
+    if(/failed to execute query/i.test(err.message)) gj = { features: [] };
+    else throw err;
+  }
   const feats = gj.features || [];
   if(feats.length === 0) throw new Error(`No lot found matching "${input}". Check the Lot/DP format (e.g. 1/DP709613).`);
   if(feats.length > 1){
