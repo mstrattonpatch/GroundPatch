@@ -684,8 +684,8 @@ let layers = [
     derived:true, sourceLayer:"Strahler Stream Order", on:true },
   { name:"IBRA Subregions", cat:"ecology", color:"#7A5C8E", field:"SUB_NAME_7",
     url:"https://gis.environment.gov.au/gispubmap/rest/services/ogc_services/IBRA7_Subregions/MapServer", id:0, on:true },
-  { name:"Points of Interest", cat:"context", color:"#5B7C99", bufferKm:CONTEXT_BUFFER_KM, field:"poitype",
-    url:"https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_POI/MapServer", id:0, on:true }
+  { name:"Roads (OpenStreetMap)", cat:"context", color:"#4A4A4A", bufferKm:CONTEXT_BUFFER_KM, noCategorize:true,
+    osm:true, osmFilter:'way["highway"]', dissolveField:"name", on:true }
 ];
 
 // Strahler order -> riparian buffer width in metres, per the team's standard:
@@ -1153,9 +1153,76 @@ function toEsriRings(geom){
 }
 
 /* =========================================================
+   Roads via OpenStreetMap's Overpass API — used instead of an ArcGIS
+   layer since Esri's public World_Transportation service is a
+   pre-rendered tile basemap (Map,Tilemap only — no Query capability,
+   so there's no way to fetch actual road geometry/names from it).
+   Overpass is free, publicly queryable, and CORS-enabled for exactly
+   this kind of client-side use (the same backend QuickOSM uses).
+========================================================= */
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+
+function largestRing(geom){
+  const rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p => p[0]);
+  return rings.reduce((a,b) => b.length > a.length ? b : a);
+}
+
+// Overpass's "poly" filter wants "lat lon lat lon ..." (space-separated, lat first)
+function ringToOverpassPoly(ring){
+  return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
+}
+
+async function queryOsmRoads(lyr){
+  const poly = ringToOverpassPoly(largestRing(bufferGeomFor(lyr)));
+  const query = `[out:json][timeout:25];${lyr.osmFilter}(poly:"${poly}");out geom;`;
+  const resp = await fetch(withProxy(OVERPASS_URL), {
+    method:'POST',
+    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
+  const json = await resp.json();
+  const features = (json.elements || [])
+    .filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1)
+    .map(el => ({
+      type:'Feature',
+      properties: el.tags || {},
+      geometry:{ type:'LineString', coordinates: el.geometry.map(pt => [pt.lon, pt.lat]) }
+    }));
+  return { type:'FeatureCollection', features };
+}
+
+// Merge same-named features (e.g. road segments split at every intersection)
+// into one feature per name, so the export has one row per road instead of
+// dozens of fragments. Not a true geometric line-merge — it combines the
+// segments into a single MultiLineString per name via turf.combine(), which
+// is enough to collapse the attribute table down to one row per road name.
+function dissolveByField(gj, field){
+  const groups = new Map();
+  (gj.features || []).forEach(f=>{
+    const key = (f.properties && f.properties[field]) || '(unnamed)';
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  });
+  const dissolved = [];
+  groups.forEach((feats, key)=>{
+    if(feats.length === 1){ dissolved.push(feats[0]); return; }
+    try{
+      const merged = turf.combine({ type:'FeatureCollection', features: feats }).features[0];
+      merged.properties = { ...feats[0].properties };
+      dissolved.push(merged);
+    }catch(e){
+      dissolved.push(...feats); // combine failed — keep the segments separate rather than lose them
+    }
+  });
+  return { type:'FeatureCollection', features: dissolved };
+}
+
+/* =========================================================
    Query a single ArcGIS layer, intersecting the boundary
 ========================================================= */
 async function queryLayer(lyr){
+  if(lyr.osm) return queryOsmRoads(lyr);
   try{
     return await queryLayerByIds(lyr);
   }catch(err){
@@ -1431,7 +1498,8 @@ async function runAll(){
 
     try{
       const rawGj = await queryLayer(lyr);
-      const gj = clipFeatureCollection(rawGj, bufferGeomFor(lyr));
+      let gj = clipFeatureCollection(rawGj, bufferGeomFor(lyr));
+      if(lyr.dissolveField) gj = dissolveByField(gj, lyr.dissolveField);
       gj.truncated = rawGj.truncated;
       gj.partial = rawGj.partial;
       gj.unpaginatedFallback = rawGj.unpaginatedFallback;
