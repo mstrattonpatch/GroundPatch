@@ -888,29 +888,53 @@ async function fetchLotByPlanLabel(input){
   return feats[0].geometry;
 }
 
+/* Address Point (layer 10) is a joined view (AddressPoint + ADDRESSSTRING_V),
+   so the WHERE clause has to use each field's fully-qualified name — the bare
+   alias (e.g. "ROADSUBURB") throws "Failed to execute query" on this service.
+   ROADSUBURB itself only holds the road+suburb text, not the house number,
+   so a query for "344 Norton Road Wamboin" has to split the leading number
+   into its own HOUSENUMBERFIRST = ... clause rather than matching it as text. */
+const ADDR_TABLE = 'GURAS_DELIVERY.sde.ADDRESSSTRING_V';
+function addrField(name){ return `${ADDR_TABLE}.${name}`; }
+function pickAddrField(props, name){
+  if(props[name] !== undefined) return props[name];
+  const key = Object.keys(props).find(k => k.toUpperCase().endsWith('.' + name.toUpperCase()));
+  return key ? props[key] : undefined;
+}
+function splitHouseNumber(text){
+  const m = text.trim().match(/^(\d+)[A-Za-z]?\s*[\/,]?\s+(.*)$/);
+  return m ? { houseNumber: m[1], streetSuburb: m[2].trim() } : { houseNumber: null, streetSuburb: text.trim() };
+}
+function addressWhereClause(query){
+  const { houseNumber, streetSuburb } = splitHouseNumber(query);
+  const cleaned = streetSuburb.toUpperCase().replace(/'/g, "''");
+  const clauses = [`${addrField('ROADSUBURB')} LIKE '%${cleaned}%'`];
+  if(houseNumber) clauses.push(`${addrField('HOUSENUMBERFIRST')} = ${houseNumber}`);
+  return clauses.join(' AND ');
+}
+const ADDR_OUT_FIELDS = ['ROADSUBURB','HOUSENUMBERFIRST','ROADNAME','SUBURBNAME'].map(addrField).join(',');
+
 async function fetchAddressSuggestions(text, limit){
-  const cleaned = text.trim().toUpperCase().replace(/'/g, "''");
   const params = new URLSearchParams({
     f:'geojson',
-    where:`ROADSUBURB LIKE '%${cleaned}%'`,
-    outFields:'ROADSUBURB,HOUSENUMBERFIRST,ROADNAME,SUBURBNAME',
+    where: addressWhereClause(text),
+    outFields: ADDR_OUT_FIELDS,
     returnGeometry:'true',
     outSR:'4326',
     resultRecordCount:String(limit || 8)
   });
   const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
   return (gj.features || []).map(f => ({
-    label: [f.properties.HOUSENUMBERFIRST, f.properties.ROADSUBURB].filter(Boolean).join(' '),
+    label: [pickAddrField(f.properties, 'HOUSENUMBERFIRST'), pickAddrField(f.properties, 'ROADSUBURB')].filter(Boolean).join(' '),
     point: f.geometry
   }));
 }
 
 async function geocodeAddress(input){
-  const cleaned = input.trim().toUpperCase().replace(/'/g, "''");
   const params = new URLSearchParams({
     f:'geojson',
-    where:`ROADSUBURB LIKE '%${cleaned}%'`,
-    outFields:'ROADSUBURB,HOUSENUMBERFIRST,ROADNAME,SUBURBNAME',
+    where: addressWhereClause(input),
+    outFields: ADDR_OUT_FIELDS,
     returnGeometry:'true',
     outSR:'4326',
     resultRecordCount:'5'
@@ -918,7 +942,7 @@ async function geocodeAddress(input){
   const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
   const feats = gj.features || [];
   if(feats.length === 0) throw new Error(`No address found matching "${input}".`);
-  const matchedAddress = [feats[0].properties.HOUSENUMBERFIRST, feats[0].properties.ROADSUBURB].filter(Boolean).join(' ');
+  const matchedAddress = [pickAddrField(feats[0].properties, 'HOUSENUMBERFIRST'), pickAddrField(feats[0].properties, 'ROADSUBURB')].filter(Boolean).join(' ');
   return { point: feats[0].geometry, matchedAddress, count: feats.length };
 }
 
