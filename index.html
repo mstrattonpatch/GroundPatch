@@ -124,8 +124,27 @@
     font-size:12px;
     line-height:1.5;
   }
-  #fileStatus .ok{ color:var(--moss); }
-  #fileStatus .err{ color:var(--red); }
+  #fileStatus .ok, #addressSearchStatus .ok{ color:var(--moss); }
+  #fileStatus .err, #addressSearchStatus .err{ color:var(--red); }
+
+  #addressSuggestions{
+    display:none; position:absolute; left:0; right:0; top:100%; z-index:50;
+    background:#fff; border:1px solid var(--line);
+    max-height:240px; overflow-y:auto; margin-top:2px; border-radius:10px;
+    box-shadow:0 4px 14px rgba(0,0,0,.08);
+  }
+  #addressSuggestions.show{ display:block; }
+  #addressSuggestions .sugg-heading{
+    font-size:10.5px; font-weight:700; color:var(--ink-soft); text-transform:uppercase;
+    letter-spacing:.03em; padding:8px 12px 4px;
+  }
+  #addressSuggestions .sugg-item{
+    padding:8px 12px; font-size:12.5px; cursor:pointer;
+  }
+  #addressSuggestions .sugg-item:hover, #addressSuggestions .sugg-item.active{
+    background:var(--moss-soft);
+  }
+  #addressSuggestions .sugg-empty{ padding:8px 12px; font-size:12px; color:var(--ink-soft); font-style:italic; }
 
   /* layer list */
   .layer-row{
@@ -444,6 +463,21 @@
       </div>
       <input type="file" id="fileInput" accept=".geojson,.json,.kml,.zip" style="display:none">
       <div id="fileStatus"></div>
+    </section>
+
+    <section>
+      <h2>Find by address or Lot/DP</h2>
+      <div style="position:relative;">
+        <div style="position:relative;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B655C" stroke-width="2.2" style="position:absolute; left:11px; top:50%; transform:translateY(-50%); pointer-events:none;">
+            <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input type="text" id="addressLotInput" placeholder="e.g. 51 Edith St Leichhardt, or 1/DP709613" style="width:100%;font-family:inherit;font-size:12px;padding:8px 10px 8px 30px;border:1px solid var(--line);border-radius:16px;margin-bottom:6px;" autocomplete="off">
+        </div>
+        <div id="addressSuggestions"></div>
+      </div>
+      <button class="secondary" id="runAddressSearch">Search</button>
+      <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
     </section>
 
     <section>
@@ -799,6 +833,199 @@ function parseKML(text){
   if(rings.length === 1) return { type:'Polygon', coordinates:[rings[0]] };
   return { type:'MultiPolygon', coordinates: rings.map(r=>[r]) };
 }
+
+/* =========================================================
+   Address / Lot-DP search — an alternative way into the same
+   loadGeometry() pipeline as uploading a file. Lot/DP goes straight
+   to the Cadastre Lot layer; an address is geocoded to a point
+   first, then resolved to whichever lot contains that point.
+========================================================= */
+const CADASTRE_LOT_URL = 'https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Cadastre/MapServer'; // spatial (point-in-polygon) lookups only — attribute querying on this service appears broken
+const LOT_SEARCH_URL = 'https://mapprod2.environment.nsw.gov.au/arcgis/rest/services/Common/LotSearch/MapServer';
+const ADDRESS_SEARCH_URL = 'https://mapprod2.environment.nsw.gov.au/arcgis/rest/services/Common/Admin_3857/MapServer';
+
+function looksLikeLotDP(q){
+  return /\b(DP|SP)\s?\d+/i.test(q);
+}
+
+function arcgisFetchJSON(url){
+  console.log('[address/lot search] requesting:', url);
+  return fetch(url).then(async resp=>{
+    if(!resp.ok){ const e = new Error(`HTTP ${resp.status}`); e.requestUrl = url; throw e; }
+    const gj = await resp.json();
+    if(gj.error){
+      let msg = gj.error.message || 'service returned an error';
+      if(gj.error.details && gj.error.details.length) msg += ' — ' + gj.error.details.join('; ');
+      console.error('[address/lot search] ArcGIS error:', gj.error);
+      const e = new Error(msg);
+      e.requestUrl = url;
+      throw e;
+    }
+    return gj;
+  }).catch(err=>{
+    if(!err.requestUrl) err.requestUrl = url; // network-level failures (e.g. Failed to fetch) land here
+    throw err;
+  });
+}
+
+async function fetchLotByPlanLabel(input){
+  const cleaned = input.replace(/\s+/g, '').toUpperCase().replace(/'/g, "''");
+  const params = new URLSearchParams({
+    f:'geojson',
+    where:`LOT_DP LIKE '${cleaned}%'`,
+    outFields:'LOT_DP',
+    returnGeometry:'true',
+    outSR:'4326',
+    resultRecordCount:'6'
+  });
+  const gj = await arcgisFetchJSON(withProxy(`${LOT_SEARCH_URL}/0/query?${params.toString()}`));
+  const feats = gj.features || [];
+  if(feats.length === 0) throw new Error(`No lot found matching "${input}". Check the Lot/DP format (e.g. 1/DP709613).`);
+  if(feats.length > 1){
+    const labels = feats.map(f => f.properties.LOT_DP).join(', ');
+    throw new Error(`Multiple lots matched — be more specific: ${labels}`);
+  }
+  return feats[0].geometry;
+}
+
+async function fetchAddressSuggestions(text, limit){
+  const cleaned = text.trim().toUpperCase().replace(/'/g, "''");
+  const params = new URLSearchParams({
+    f:'geojson',
+    where:`ROADSUBURB LIKE '%${cleaned}%'`,
+    outFields:'ROADSUBURB,HOUSENUMBERFIRST,ROADNAME,SUBURBNAME',
+    returnGeometry:'true',
+    outSR:'4326',
+    resultRecordCount:String(limit || 8)
+  });
+  const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
+  return (gj.features || []).map(f => ({
+    label: [f.properties.HOUSENUMBERFIRST, f.properties.ROADSUBURB].filter(Boolean).join(' '),
+    point: f.geometry
+  }));
+}
+
+async function geocodeAddress(input){
+  const cleaned = input.trim().toUpperCase().replace(/'/g, "''");
+  const params = new URLSearchParams({
+    f:'geojson',
+    where:`ROADSUBURB LIKE '%${cleaned}%'`,
+    outFields:'ROADSUBURB,HOUSENUMBERFIRST,ROADNAME,SUBURBNAME',
+    returnGeometry:'true',
+    outSR:'4326',
+    resultRecordCount:'5'
+  });
+  const gj = await arcgisFetchJSON(withProxy(`${ADDRESS_SEARCH_URL}/10/query?${params.toString()}`));
+  const feats = gj.features || [];
+  if(feats.length === 0) throw new Error(`No address found matching "${input}".`);
+  const matchedAddress = [feats[0].properties.HOUSENUMBERFIRST, feats[0].properties.ROADSUBURB].filter(Boolean).join(' ');
+  return { point: feats[0].geometry, matchedAddress, count: feats.length };
+}
+
+async function fetchLotContainingPoint(pointGeom){
+  const esriPt = { x: pointGeom.coordinates[0], y: pointGeom.coordinates[1], spatialReference:{ wkid:4326 } };
+  const params = new URLSearchParams({
+    f:'geojson',
+    geometry: JSON.stringify(esriPt),
+    geometryType:'esriGeometryPoint',
+    inSR:'4326',
+    spatialRel:'esriSpatialRelIntersects',
+    outFields:'planlabel',
+    returnGeometry:'true',
+    outSR:'4326',
+    resultRecordCount:'1'
+  });
+  const gj = await arcgisFetchJSON(withProxy(`${CADASTRE_LOT_URL}/9/query?${params.toString()}`));
+  const feats = gj.features || [];
+  if(feats.length === 0) throw new Error('Found the address, but no cadastral lot contains that point.');
+  return { geometry: feats[0].geometry, planlabel: feats[0].properties.planlabel };
+}
+
+document.getElementById('runAddressSearch').addEventListener('click', async ()=>{
+  const btn = document.getElementById('runAddressSearch');
+  const statusEl = document.getElementById('addressSearchStatus');
+  const query = document.getElementById('addressLotInput').value.trim();
+  if(!query){ statusEl.innerHTML = '<span class="err">Type an address or Lot/DP first.</span>'; return; }
+
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Searching…';
+  statusEl.innerHTML = '';
+  try{
+    let geom, label;
+    if(looksLikeLotDP(query)){
+      geom = await fetchLotByPlanLabel(query);
+      label = query;
+    } else {
+      const geocoded = await geocodeAddress(query);
+      const lot = await fetchLotContainingPoint(geocoded.point);
+      geom = lot.geometry;
+      label = geocoded.matchedAddress || query;
+      if(geocoded.count > 1) statusEl.innerHTML = `<span class="ok">Matched ${geocoded.count} address points — used the first: ${label}. Refine your search if this is the wrong one.</span><br>`;
+    }
+    loadGeometry(geom, label);
+    statusEl.innerHTML += `<span class="ok">Loaded: ${label}</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
+  }finally{
+    btn.disabled = false; btn.textContent = original;
+  }
+});
+
+/* =========================================================
+   Address suggestions dropdown — fetches candidates as you type,
+   and clicking one resolves straight to its lot (no re-geocoding
+   needed, since the exact point was already returned).
+========================================================= */
+let addressSuggestTimer = null;
+const addressInput = document.getElementById('addressLotInput');
+const suggestBox = document.getElementById('addressSuggestions');
+
+addressInput.addEventListener('input', ()=>{
+  const text = addressInput.value.trim();
+  clearTimeout(addressSuggestTimer);
+  if(text.length < 3 || looksLikeLotDP(text)){
+    suggestBox.classList.remove('show');
+    suggestBox.innerHTML = '';
+    return;
+  }
+  addressSuggestTimer = setTimeout(async ()=>{
+    try{
+      const matches = await fetchAddressSuggestions(text, 8);
+      if(matches.length === 0){
+        suggestBox.innerHTML = '<div class="sugg-empty">No matches</div>';
+        suggestBox.classList.add('show');
+        return;
+      }
+      suggestBox.innerHTML = '<div class="sugg-heading">Address</div>' + matches.map((m,i)=>`<div class="sugg-item" data-idx="${i}">${m.label}</div>`).join('');
+      suggestBox.classList.add('show');
+      suggestBox.querySelectorAll('.sugg-item').forEach(el=>{
+        el.addEventListener('click', async ()=>{
+          const m = matches[+el.dataset.idx];
+          addressInput.value = m.label;
+          suggestBox.classList.remove('show');
+          const statusEl = document.getElementById('addressSearchStatus');
+          statusEl.innerHTML = '<span class="ok">Loading…</span>';
+          try{
+            const lot = await fetchLotContainingPoint(m.point);
+            loadGeometry(lot.geometry, m.label);
+            statusEl.innerHTML = `<span class="ok">Loaded: ${m.label}</span>`;
+          }catch(err){
+            statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
+          }
+        });
+      });
+    }catch(err){
+      suggestBox.classList.remove('show'); // fail quietly — the Search button still works as a fallback
+    }
+  }, 300);
+});
+
+document.addEventListener('click', e=>{
+  if(!suggestBox.contains(e.target) && e.target !== addressInput) suggestBox.classList.remove('show');
+});
+addressInput.addEventListener('keydown', e=>{
+  if(e.key === 'Escape') suggestBox.classList.remove('show');
+});
 
 function loadGeometry(geom, filename){
   boundaryGeom = geom;
