@@ -580,26 +580,34 @@ function ringToOverpassPoly(ring){
 // service this app can't be tested live against) and sends an explicit
 // Accept header, since some servers 406 a request that omits one entirely
 // (which fetch() doesn't add by default, unlike a browser's own navigation).
+const OVERPASS_PER_ENDPOINT_TIMEOUT_MS = 20000;
+
 async function postOverpassQuery(query){
-  let lastErr;
+  const attempts = [];
   for(const endpoint of OVERPASS_ENDPOINTS){
+    const controller = new AbortController();
+    const timer = setTimeout(()=> controller.abort(), OVERPASS_PER_ENDPOINT_TIMEOUT_MS);
     try{
       const resp = await fetch(withProxy(endpoint), {
         method:'POST',
         headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
-        body: 'data=' + encodeURIComponent(query)
+        body: 'data=' + encodeURIComponent(query),
+        signal: controller.signal
       });
       if(!resp.ok){
         const bodyText = await resp.text().catch(()=> '');
-        throw new Error(`HTTP ${resp.status} from ${endpoint}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300) : ''}`);
+        throw new Error(`HTTP ${resp.status}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,200) : ''}`);
       }
       return await resp.json();
     }catch(err){
-      lastErr = err;
+      const msg = err.name === 'AbortError' ? `timed out after ${OVERPASS_PER_ENDPOINT_TIMEOUT_MS/1000}s` : err.message;
+      attempts.push(`${endpoint}: ${msg}`);
       console.warn(`Overpass endpoint ${endpoint} failed, trying next.`, err);
+    }finally{
+      clearTimeout(timer);
     }
   }
-  throw lastErr;
+  throw new Error(`All Overpass endpoints failed — ${attempts.join(' | ')}`);
 }
 
 async function fetchWalkableNetwork(queryGeom){
