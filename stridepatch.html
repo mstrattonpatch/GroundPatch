@@ -301,15 +301,18 @@
 
 <script>
 /* =========================================================
-   Map setup — plain OpenStreetMap tiles: no API key needed (CARTO's
-   free anonymous basemap access now requires one), and keeps street
-   names/context legible, which matters more here than aerial imagery
-   does for a walking-network tool.
+   Map setup — Esri's World_Street_Map service: the same z/y/x tile
+   pattern GroundPatch already relies on for World_Imagery, proven to
+   work without an API key in this environment. Tried CARTO Positron
+   (now requires a key) and raw OpenStreetMap tiles (actively blocks
+   third-party apps that don't register per their usage policy) first —
+   both dead ends, so sticking with the already-proven Esri service
+   rather than gambling on a third free provider.
 ========================================================= */
 const map = L.map('map', { zoomControl:true }).setView([-33.87, 151.21], 14);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
+  attribution: 'Esri, HERE, Garmin, OpenStreetMap contributors'
 }).addTo(map);
 L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
 
