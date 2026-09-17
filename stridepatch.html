@@ -361,14 +361,13 @@ map.on('click', (e)=>{
 });
 
 /* =========================================================
-   CORS proxy — same Cloudflare Worker GroundPatch uses, already
-   allow-listing overpass-api.de. Direct fetch to Overpass sometimes
-   fails from a deployed static site ("Failed to fetch") even though
-   Overpass is generally CORS-open, so route through the proxy rather
-   than depend on that.
+   CORS proxy — same Cloudflare Worker GroundPatch uses. Direct fetch
+   to Overpass sometimes fails from a deployed static site ("Failed to
+   fetch") even though Overpass is generally CORS-open, so route
+   through the proxy rather than depend on that.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-const PROXY_HOSTS = ['overpass-api.de'];
+const PROXY_HOSTS = ['overpass-api.de', 'overpass.kumi.systems'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
   catch(e){ return false; }
@@ -553,7 +552,14 @@ function fitMapToSites(){
    so there's no ArcGIS equivalent to pull real road geometry/names
    from — Overpass is the only practical free source for this.
 ========================================================= */
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+// Multiple public instances, tried in order — overpass-api.de has been
+// returning a hard Apache-level 406 (confirmed independent of this app,
+// via a plain direct browser request), and overpass.kumi.systems can be
+// slow/busy under load, so falling back rather than depending on one.
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+];
 
 // Ways considered walkable — excludes motorways/trunk roads (not walkable)
 // and anything explicitly tagged as foot- or access-restricted.
@@ -575,16 +581,25 @@ function ringToOverpassPoly(ring){
 // Accept header, since some servers 406 a request that omits one entirely
 // (which fetch() doesn't add by default, unlike a browser's own navigation).
 async function postOverpassQuery(query){
-  const resp = await fetch(withProxy(OVERPASS_URL), {
-    method:'POST',
-    headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
-    body: 'data=' + encodeURIComponent(query)
-  });
-  if(!resp.ok){
-    const bodyText = await resp.text().catch(()=> '');
-    throw new Error(`HTTP ${resp.status} from Overpass API${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300) : ''}`);
+  let lastErr;
+  for(const endpoint of OVERPASS_ENDPOINTS){
+    try{
+      const resp = await fetch(withProxy(endpoint), {
+        method:'POST',
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
+        body: 'data=' + encodeURIComponent(query)
+      });
+      if(!resp.ok){
+        const bodyText = await resp.text().catch(()=> '');
+        throw new Error(`HTTP ${resp.status} from ${endpoint}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300) : ''}`);
+      }
+      return await resp.json();
+    }catch(err){
+      lastErr = err;
+      console.warn(`Overpass endpoint ${endpoint} failed, trying next.`, err);
+    }
   }
-  return resp.json();
+  throw lastErr;
 }
 
 async function fetchWalkableNetwork(queryGeom){
