@@ -301,14 +301,15 @@
 
 <script>
 /* =========================================================
-   Map setup — CARTO Positron: light basemap that keeps street
-   names/context legible, which matters a lot more here than
-   aerial imagery does for a walking-network tool.
+   Map setup — plain OpenStreetMap tiles: no API key needed (CARTO's
+   free anonymous basemap access now requires one), and keeps street
+   names/context legible, which matters more here than aerial imagery
+   does for a walking-network tool.
 ========================================================= */
 const map = L.map('map', { zoomControl:true }).setView([-33.87, 151.21], 14);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+  attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
 
@@ -552,16 +553,28 @@ function ringToOverpassPoly(ring){
   return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
 }
 
+// Shared POST helper — surfaces the actual response body on failure (an
+// HTTP status alone, e.g. a bare "406", isn't enough to diagnose against a
+// service this app can't be tested live against) and sends an explicit
+// Accept header, since some servers 406 a request that omits one entirely
+// (which fetch() doesn't add by default, unlike a browser's own navigation).
+async function postOverpassQuery(query){
+  const resp = await fetch(withProxy(OVERPASS_URL), {
+    method:'POST',
+    headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if(!resp.ok){
+    const bodyText = await resp.text().catch(()=> '');
+    throw new Error(`HTTP ${resp.status} from Overpass API${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,300) : ''}`);
+  }
+  return resp.json();
+}
+
 async function fetchWalkableNetwork(queryGeom){
   const poly = ringToOverpassPoly(largestRing(queryGeom));
   const query = `[out:json][timeout:30];${OSM_WALKABLE_FILTER}(poly:"${poly}");out geom;`;
-  const resp = await fetch(withProxy(OVERPASS_URL), {
-    method:'POST',
-    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query)
-  });
-  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
-  const json = await resp.json();
+  const json = await postOverpassQuery(query);
   return (json.elements || []).filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
 }
 
@@ -575,13 +588,7 @@ const OSM_CROSSING_FILTER = '(node["highway"="crossing"]["crossing"!~"^(no|infor
 async function fetchArterialAndCrossings(queryGeom){
   const poly = ringToOverpassPoly(largestRing(queryGeom));
   const query = `[out:json][timeout:30];(${OSM_ARTERIAL_FILTER}(poly:"${poly}");${OSM_CROSSING_FILTER}(poly:"${poly}"););out geom;`;
-  const resp = await fetch(withProxy(OVERPASS_URL), {
-    method:'POST',
-    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query)
-  });
-  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
-  const json = await resp.json();
+  const json = await postOverpassQuery(query);
   const elements = json.elements || [];
   const arterialWays = elements.filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
   const crossingNodes = elements.filter(el => el.type === 'node' && typeof el.lat === 'number').map(el => ({ lat: el.lat, lon: el.lon }));
