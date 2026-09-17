@@ -303,7 +303,7 @@
 
 <div id="mapwrap">
   <div id="map"></div>
-  <div id="loadingOverlay"><div>Fetching street network and computing catchments… (public Overpass mirrors can take up to a minute under load — check the Debug log for live progress)</div></div>
+  <div id="loadingOverlay"><div>Fetching street network and computing catchments… (public Overpass mirrors can take up to a minute or two under load, per site — check the Debug log for live progress)</div></div>
   <div class="legend-box" id="legendBox" style="display:none;"></div>
 </div>
 
@@ -560,15 +560,19 @@ function fitMapToSites(){
    so there's no ArcGIS equivalent to pull real road geometry/names
    from — Overpass is the only practical free source for this.
 ========================================================= */
-// Multiple public instances, tried in order. The bare overpass-api.de host
-// is deliberately excluded — confirmed via a plain direct browser request
-// (no app/proxy/headers involved) to return a hard Apache mod_negotiation
-// 406 regardless of anything this app does, so retrying it wastes time for
-// zero chance of success. lz4.overpass-api.de is the same operator on a
-// different subdomain, which may route to a different (working) backend.
+// Multiple public instances, tried in order. Every overpass-api.de
+// subdomain (bare and lz4) is deliberately excluded — confirmed via a
+// plain direct browser request (no app/proxy/headers involved) to return
+// the identical hard Apache mod_negotiation 406 on both, so it's a
+// problem across that whole operator's infrastructure right now, not
+// anything request-specific; retrying any of their hosts wastes time for
+// zero chance of success. overpass.private.coffee is a different,
+// independent community mirror (untested against this app so far — if it
+// also fails, that failure is new information, not a repeat of the same
+// overpass-api.de issue).
 const OVERPASS_ENDPOINTS = [
   'https://overpass.kumi.systems/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ];
 
 // Ways considered walkable — excludes motorways/trunk roads (not walkable)
@@ -592,8 +596,11 @@ function ringToOverpassPoly(ring){
 // (which fetch() doesn't add by default, unlike a browser's own navigation).
 // 20s wasn't enough for a real (if loaded) mirror processing a ~3km-wide
 // query area — Overpass's own internal timeout on this class of query
-// took closer to a minute before it self-reported as busy.
-const OVERPASS_PER_ENDPOINT_TIMEOUT_MS = 60000;
+// took closer to a minute before it self-reported as busy. Set slightly
+// above the local proxy's own 90s backend timeout (cors-proxy.py) so the
+// browser doesn't give up first and mask a response that was about to
+// arrive.
+const OVERPASS_PER_ENDPOINT_TIMEOUT_MS = 95000;
 
 /* =========================================================
    Debug log — every Overpass query and its exact response/error,
