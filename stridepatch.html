@@ -487,11 +487,24 @@ let sites = [];
 let siteIdCounter = 0;
 const SITE_COLOR_PALETTE = ['#3B5567','#B9852E','#7A5C8E','#52684A','#9C3B3B','#3B7C97'];
 
+// Drawn immediately on upload (not just after a successful catchment run) —
+// no reason a later network failure should hide where the sites even are.
+function drawSiteBoundary(site){
+  if(site.siteLayer) map.removeLayer(site.siteLayer);
+  site.siteLayer = L.geoJSON(site.geom, {
+    pane:'sitePane',
+    style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 }
+  }).addTo(map);
+  site.siteLayer.bindTooltip(site.name, { sticky:true });
+}
+
 function addSitesFromGeometries(geoms, filename){
   geoms.forEach((geom, i)=>{
     const id = siteIdCounter++;
     const name = geoms.length > 1 ? `${filename.replace(/\.[^.]+$/,'')} — site ${i+1}` : filename.replace(/\.[^.]+$/,'');
-    sites.push({ id, name, geom, color: SITE_COLOR_PALETTE[id % SITE_COLOR_PALETTE.length], catchments:null, siteLayer:null, catchmentLayers:[] });
+    const site = { id, name, geom, color: SITE_COLOR_PALETTE[id % SITE_COLOR_PALETTE.length], catchments:null, siteLayer:null, catchmentLayers:[] };
+    sites.push(site);
+    drawSiteBoundary(site);
   });
   renderSiteList();
   fitMapToSites();
@@ -813,9 +826,9 @@ async function runCatchments(){
     card.className = 'result-card';
     resultsEl.appendChild(card);
 
-    if(site.siteLayer) map.removeLayer(site.siteLayer);
     site.catchmentLayers.forEach(l=>map.removeLayer(l));
     site.catchmentLayers = [];
+    drawSiteBoundary(site); // re-drawn regardless of whether the fetch below succeeds
 
     try{
       const centroid = turf.centroid(turf.feature(site.geom)).geometry.coordinates; // [lon, lat]
@@ -852,12 +865,6 @@ async function runCatchments(){
         layer.bindTooltip(`${site.name} — ${c.threshold}m walk`, { sticky:true });
         site.catchmentLayers.push(layer);
       });
-
-      site.siteLayer = L.geoJSON(site.geom, {
-        pane:'sitePane',
-        style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 }
-      }).addTo(map);
-      site.siteLayer.bindTooltip(site.name, { sticky:true });
 
       card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
         <div class="rc-body">${site.catchments.length} catchment(s): ${site.catchments.map(c=>c.threshold+'m').join(', ')}. Snapped to street network ${snapDist.toFixed(0)}m from site centroid.</div>`;
@@ -976,9 +983,7 @@ async function runLmrCheck(){
           lineR.bindTooltip(`${site.name} — restricted: ${distR.toFixed(0)}m`, { sticky:true });
           site.lmrLayers.push(lineR);
         }
-        if(site.siteLayer) map.removeLayer(site.siteLayer);
-        site.siteLayer = L.geoJSON(site.geom, { pane:'sitePane', style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 } }).addTo(map);
-        site.lmrLayers.push(site.siteLayer);
+        drawSiteBoundary(site); // already drawn on upload — just make sure it's still on top after the route lines
 
         const changed = classU !== classR;
         const geomU = pathU ? pathToLineString(nodes, pathU) : null;
