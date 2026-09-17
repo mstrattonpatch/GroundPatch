@@ -634,9 +634,14 @@ async function runCatchments(){
     try{
       const centroid = turf.centroid(turf.feature(site.geom)).geometry.coordinates; // [lon, lat]
 
-      // Query area: site buffered outward by max distance plus a safety
-      // margin, so the network fetch fully covers the catchment we're about to compute.
-      const queryArea = turf.buffer(turf.feature(site.geom), (maxDistance * 1.3) / 1000, { units:'kilometers', steps:16 });
+      // Query area: a plain circle around the site centroid, radius = max distance
+      // plus a safety margin. Deliberately NOT the site's own (possibly very
+      // detailed — DA/SSDA boundaries can run to hundreds of vertices) outline
+      // buffered outward, which produces an oversized Overpass "poly" filter
+      // that gets rejected outright (HTTP 406) — a circle has a small, fixed
+      // vertex count regardless of the site shape's complexity, and is just as
+      // good a query area since it only needs to safely cover the catchment radius.
+      const queryArea = turf.circle(centroid, (maxDistance * 1.3) / 1000, { units:'kilometers', steps:32 });
       const ways = await fetchWalkableNetwork(queryArea.geometry);
       if(!ways.length) throw new Error('No walkable streets/footpaths found from OpenStreetMap near this site.');
 
