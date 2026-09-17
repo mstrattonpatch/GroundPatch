@@ -620,6 +620,11 @@ L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/
 }).addTo(map);
 L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
 
+// Dedicated pane so the subject site outline always renders above queried
+// layer results, regardless of the order they're added to the map in.
+map.createPane('boundaryPane');
+map.getPane('boundaryPane').style.zIndex = 650; // above the default overlay pane (400)
+
 let boundaryLayer = null;
 let boundaryGeom = null;   // GeoJSON geometry, Polygon or MultiPolygon, WGS84
 let assessmentGeom = null; // 5km rounded buffer — used for querying/clipping ecology layers
@@ -1058,6 +1063,7 @@ function loadGeometry(geom, filename){
   boundaryGeom = geom;
   if(boundaryLayer) map.removeLayer(boundaryLayer);
   boundaryLayer = L.geoJSON(geom, {
+    pane:'boundaryPane',
     style:{ color:'#E81717', weight:2.5, fill:true, fillColor:'#E81717', fillOpacity:0.05 }
   }).addTo(map);
   boundaryLayer.bindTooltip('Subject Site', { sticky:true });
