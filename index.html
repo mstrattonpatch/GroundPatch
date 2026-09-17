@@ -873,17 +873,11 @@ function arcgisFetchJSON(url){
   });
 }
 
-// LotSearch/0 is EPICDB.sde.DCDB_DELIVERY_LOTTAG_XY_V — another Oracle SDE view
-// (same "_V" tell as ADDRESSSTRING_V), which throws "Failed to execute query"
-// for a bare column name in the WHERE clause the same way the address layer did.
-const LOT_TABLE = 'EPICDB.sde.DCDB_DELIVERY_LOTTAG_XY_V';
-function lotField(name){ return `${LOT_TABLE}.${name}`; }
-
 async function fetchLotByPlanLabel(input){
   const cleaned = input.replace(/\s+/g, '').toUpperCase().replace(/'/g, "''");
   const params = new URLSearchParams({
     f:'geojson',
-    where:`${lotField('LOT_DP')} LIKE '${cleaned}%'`,
+    where:`LOT_DP LIKE '${cleaned}%'`, // this layer's own metadata lists LOT_DP as a plain (unqualified) field name — unlike the joined Address Point layer, qualifying it here is wrong
     outFields:'*',
     returnGeometry:'true',
     outSR:'4326',
