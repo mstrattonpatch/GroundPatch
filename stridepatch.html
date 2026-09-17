@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>StridePatch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:ital,wght@1,600;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
+<style>
+  :root{
+    --ink:#1E2A24;
+    --ink-soft:#4B564E;
+    --paper:#EDEAE0;
+    --panel:#F6F4EC;
+    --line:#C9C4B4;
+    --moss:#52684A;
+    --moss-soft:#DDE4D6;
+    --slate:#3B5567;
+    --slate-soft:#DCE4E8;
+    --amber:#B9852E;
+    --amber-soft:#F0E1C4;
+    --red:#9C3B3B;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:'Public Sans', system-ui, sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    display:flex;
+    height:100vh;
+    overflow:hidden;
+  }
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  #sidebar{
+    width:380px;
+    min-width:380px;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  #sidebar-scroll{
+    overflow-y:auto;
+    flex:1;
+    padding:20px 20px 40px;
+  }
+  header.brand{
+    padding:18px 20px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  header.brand .brand-row{
+    display:flex; align-items:center; gap:10px; margin-bottom:2px;
+  }
+  header.brand h1{
+    margin:0;
+    font-size:16px;
+    font-weight:700;
+    letter-spacing:0.01em;
+  }
+  header.brand h1 .wordmark-patch{
+    font-family:'Fraunces', serif;
+    font-style:italic;
+    font-weight:700;
+    font-size:1.2em;
+    letter-spacing:-0.01em;
+    background:linear-gradient(100deg, #52684A 0%, #3B5567 100%);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+  header.brand .tagline{
+    font-size:11px;
+    color:var(--ink-soft);
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    margin:2px 0 0;
+  }
+  header.brand p{
+    margin:4px 0 0;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    line-height:1.4;
+  }
+
+  section{ margin-bottom:22px; }
+  section h2{
+    font-size:11.5px;
+    font-weight:600;
+    color:var(--ink-soft);
+    margin:0 0 8px;
+    padding-bottom:6px;
+    border-bottom:1px solid var(--line);
+  }
+
+  #dropzone{
+    border:1.5px dashed var(--line);
+    background:#fff;
+    border-radius:2px;
+    padding:16px;
+    text-align:center;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    transition:border-color .15s;
+  }
+  #dropzone:hover, #dropzone.drag{
+    border-color:var(--moss);
+    color:var(--ink);
+  }
+  #dropzone strong{ color:var(--ink); font-weight:600; }
+  #fileStatus{
+    margin-top:8px;
+    font-size:12px;
+    line-height:1.5;
+  }
+  #fileStatus .ok{ color:var(--moss); }
+  #fileStatus .err{ color:var(--red); }
+
+  .site-row{
+    display:flex;
+    align-items:center;
+    gap:9px;
+    padding:7px 0;
+    border-bottom:1px solid #E4E0D2;
+    font-size:12.5px;
+  }
+  .site-row:last-child{ border-bottom:none; }
+  .site-row .swatch{ width:10px; height:10px; flex:none; border:1px solid rgba(0,0,0,.25); border-radius:50%; }
+  .site-row .name{ flex:1; }
+  .site-row button.del{
+    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:15px; line-height:1; padding:2px 4px;
+  }
+  .site-row button.del:hover{ color:var(--red); }
+
+  label.field{ display:block; font-size:11.5px; color:var(--ink-soft); margin:0 0 4px; }
+  .field-row{ display:flex; gap:10px; margin-bottom:10px; }
+  .field-row > div{ flex:1; }
+  input[type=number], input[type=text]{
+    width:100%; font-family:inherit; font-size:12.5px; padding:7px 9px;
+    border:1px solid var(--line); border-radius:2px; background:#fff; color:var(--ink);
+  }
+  input[type=number]:focus, input[type=text]:focus{ outline:none; border-color:var(--moss); }
+
+  button{
+    font-family:inherit; font-size:12.5px; cursor:pointer;
+    border-radius:2px; border:1px solid var(--line); background:#fff; color:var(--ink);
+    padding:8px 12px; transition:background .12s, border-color .12s;
+  }
+  button:hover{ border-color:var(--moss); }
+  button:disabled{ opacity:.5; cursor:default; }
+  button.primary{
+    width:100%; background:var(--moss); color:#fff; border-color:var(--moss); font-weight:600; padding:10px 12px;
+  }
+  button.primary:hover{ background:#455C3E; }
+  button.secondary{ width:100%; }
+
+  .result-card{
+    background:#fff; border:1px solid var(--line); border-radius:2px; padding:10px 12px; margin-bottom:8px; font-size:12.5px;
+  }
+  .result-card .rc-head{ display:flex; align-items:center; gap:8px; font-weight:600; }
+  .result-card .rc-body{ margin-top:4px; color:var(--ink-soft); line-height:1.5; }
+  .result-card.error{ border-color:var(--red); }
+
+  .export-row{
+    display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #E4E0D2; font-size:12.5px;
+  }
+  .export-row:last-child{ border-bottom:none; }
+  .export-row .name{ flex:1; }
+  .export-row button{ padding:5px 8px; font-size:11.5px; }
+
+  #mapwrap{ flex:1; position:relative; }
+  #map{ height:100%; }
+  #loadingOverlay{
+    display:none; position:absolute; inset:0; background:rgba(237,234,224,.85); z-index:1000;
+    align-items:center; justify-content:center; font-size:13px; color:var(--ink-soft);
+  }
+  #loadingOverlay.show{ display:flex; }
+
+  .legend-box{
+    position:absolute; left:12px; bottom:12px; z-index:900;
+    background:#fff; border:1px solid var(--line); border-radius:2px; padding:10px 12px; font-size:11.5px;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+  }
+  .legend-box .lg-row{ display:flex; align-items:center; gap:6px; margin-top:4px; }
+  .legend-box .lg-row:first-child{ margin-top:0; }
+  .legend-box .lg-swatch{ width:14px; height:10px; flex:none; border:1px solid rgba(0,0,0,.25); }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <header class="brand">
+    <div class="brand-row">
+      <h1>Stride<span class="wordmark-patch">Patch</span></h1>
+    </div>
+    <p class="tagline">Walkability Catchments</p>
+    <p>Upload one or more site polygons, set a walking distance and interval, and generate street-network walking catchments (not straight-line buffers) for each site.</p>
+  </header>
+
+  <div id="sidebar-scroll">
+
+    <section>
+      <h2>Sites</h2>
+      <div id="dropzone">
+        <div><strong>Click to upload</strong> or drag a file here</div>
+        <div style="margin-top:4px;">.geojson · .json · .kml · .zip (shapefile) — every polygon in the file becomes a site</div>
+      </div>
+      <input type="file" id="fileInput" accept=".geojson,.json,.kml,.zip" style="display:none">
+      <div id="fileStatus"></div>
+      <div id="siteList" style="margin-top:8px;"></div>
+    </section>
+
+    <section>
+      <h2>Catchment settings</h2>
+      <div class="field-row">
+        <div>
+          <label class="field">Max distance (m)</label>
+          <input type="number" id="maxDistance" value="1200" min="100" step="100">
+        </div>
+        <div>
+          <label class="field">Interval (m)</label>
+          <input type="number" id="interval" value="400" min="50" step="50">
+        </div>
+      </div>
+      <label class="field">Walking corridor width (m) — how wide each street is drawn</label>
+      <input type="number" id="corridorWidth" value="20" min="5" step="5" style="margin-bottom:10px;">
+      <button class="primary" id="runCatchments">Generate catchments</button>
+      <div id="runStatus" style="margin-top:6px;font-size:12px;"></div>
+    </section>
+
+    <section id="resultsSection" style="display:none;">
+      <h2>Results</h2>
+      <div id="resultsList"></div>
+    </section>
+
+    <section id="exportSection" style="display:none;">
+      <h2>Export</h2>
+      <div id="exportList"></div>
+      <button class="secondary" id="downloadAllZip" style="margin-top:8px;">Download everything (.zip)</button>
+    </section>
+
+  </div>
+</div>
+
+<div id="mapwrap">
+  <div id="map"></div>
+  <div id="loadingOverlay"><div>Fetching street network and computing catchments…</div></div>
+  <div class="legend-box" id="legendBox" style="display:none;"></div>
+</div>
+
+<script>
+/* =========================================================
+   Map setup — CARTO Positron: light basemap that keeps street
+   names/context legible, which matters a lot more here than
+   aerial imagery does for a walking-network tool.
+========================================================= */
+const map = L.map('map', { zoomControl:true }).setView([-33.87, 151.21], 14);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+}).addTo(map);
+L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
+
+map.createPane('sitePane');
+map.getPane('sitePane').style.zIndex = 650; // sites always render above their own catchments
+
+/* =========================================================
+   CORS proxy — same Cloudflare Worker GroundPatch uses, already
+   allow-listing overpass-api.de. Direct fetch to Overpass sometimes
+   fails from a deployed static site ("Failed to fetch") even though
+   Overpass is generally CORS-open, so route through the proxy rather
+   than depend on that.
+========================================================= */
+const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
+const PROXY_HOSTS = ['overpass-api.de'];
+function needsProxy(url){
+  try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
+  catch(e){ return false; }
+}
+function withProxy(url){
+  return needsProxy(url) ? LOCAL_PROXY + encodeURIComponent(url) : url;
+}
+
+/* =========================================================
+   File upload — every Polygon/MultiPolygon feature in the file
+   becomes a separate site (unlike GroundPatch, which only takes
+   the first one — this tool is built around handling several).
+========================================================= */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileStatus = document.getElementById('fileStatus');
+
+dropzone.addEventListener('click', ()=> fileInput.click());
+['dragover','dragleave','drop'].forEach(evt=>{
+  dropzone.addEventListener(evt, e=>{
+    e.preventDefault();
+    dropzone.classList.toggle('drag', evt==='dragover');
+  });
+});
+dropzone.addEventListener('drop', e=>{
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function handleFile(file){
+  const ext = file.name.split('.').pop().toLowerCase();
+  fileStatus.innerHTML = `Reading <strong>${file.name}</strong>…`;
+
+  if(ext==='geojson' || ext==='json'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{
+        const gj = JSON.parse(e.target.result);
+        addSitesFromGeometries(extractAllGeometries(gj), file.name);
+      }catch(err){ fail('Could not parse GeoJSON: ' + err.message); }
+    };
+    reader.readAsText(file);
+
+  }else if(ext==='kml'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{
+        const geoms = parseKMLAll(e.target.result);
+        addSitesFromGeometries(geoms, file.name);
+      }catch(err){ fail('Could not parse KML: ' + err.message); }
+    };
+    reader.readAsText(file);
+
+  }else if(ext==='zip'){
+    if(typeof shp === 'undefined'){
+      fail('Shapefile support (shp.js) did not load — check network access to cdnjs, or export as GeoJSON/KML instead.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      shp(e.target.result).then(gj=>{
+        addSitesFromGeometries(extractAllGeometries(gj), file.name);
+      }).catch(err=> fail('Could not parse shapefile: ' + err.message));
+    };
+    reader.readAsArrayBuffer(file);
+
+  }else{
+    fail('Unsupported file type: .' + ext);
+  }
+}
+
+function fail(msg){
+  fileStatus.innerHTML = `<span class="err">${msg}</span>`;
+}
+
+// Pull every Polygon/MultiPolygon geometry out of a Feature, FeatureCollection, or bare geometry
+function extractAllGeometries(gj){
+  if(!gj) throw new Error('empty file');
+  if(gj.type === 'FeatureCollection'){
+    const geoms = gj.features.filter(f => f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon')).map(f=>f.geometry);
+    if(!geoms.length) throw new Error('no polygon features found');
+    return geoms;
+  }
+  if(gj.type === 'Feature') return [gj.geometry];
+  if(gj.type === 'Polygon' || gj.type === 'MultiPolygon') return [gj];
+  throw new Error('no polygon geometry found');
+}
+
+// Minimal KML polygon parser — reads every <Polygon><outerBoundaryIs><LinearRing><coordinates>
+function parseKMLAll(text){
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  const polys = doc.getElementsByTagName('Polygon');
+  if(!polys.length) throw new Error('no <Polygon> elements found in KML');
+  const geoms = [];
+  for(const poly of polys){
+    const coordEls = poly.getElementsByTagName('coordinates');
+    if(!coordEls.length) continue;
+    const raw = coordEls[0].textContent.trim();
+    const ring = raw.split(/\s+/).map(pair=>{
+      const [lon, lat] = pair.split(',').map(Number);
+      return [lon, lat];
+    });
+    geoms.push({ type:'Polygon', coordinates:[ring] });
+  }
+  if(!geoms.length) throw new Error('no coordinates found in KML polygons');
+  return geoms;
+}
+
+/* =========================================================
+   Sites registry — each site is one polygon with its own
+   generated catchments, all independent of each other.
+========================================================= */
+let sites = [];
+let siteIdCounter = 0;
+const SITE_COLOR_PALETTE = ['#3B5567','#B9852E','#7A5C8E','#52684A','#9C3B3B','#3B7C97'];
+
+function addSitesFromGeometries(geoms, filename){
+  geoms.forEach((geom, i)=>{
+    const id = siteIdCounter++;
+    const name = geoms.length > 1 ? `${filename.replace(/\.[^.]+$/,'')} — site ${i+1}` : filename.replace(/\.[^.]+$/,'');
+    sites.push({ id, name, geom, color: SITE_COLOR_PALETTE[id % SITE_COLOR_PALETTE.length], catchments:null, siteLayer:null, catchmentLayers:[] });
+  });
+  renderSiteList();
+  fitMapToSites();
+  fileStatus.innerHTML = `<span class="ok">Loaded ${geoms.length} site${geoms.length>1?'s':''} from ${filename}</span>`;
+}
+
+function renderSiteList(){
+  const el = document.getElementById('siteList');
+  el.innerHTML = '';
+  sites.forEach(site=>{
+    const row = document.createElement('div');
+    row.className = 'site-row';
+    row.innerHTML = `
+      <span class="swatch" style="background:${site.color}"></span>
+      <span class="name">${site.name}</span>
+      <button class="del" data-id="${site.id}" title="Remove">&times;</button>
+    `;
+    el.appendChild(row);
+  });
+  el.querySelectorAll('button.del').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const id = +e.target.dataset.id;
+      const site = sites.find(s=>s.id===id);
+      if(site){
+        if(site.siteLayer) map.removeLayer(site.siteLayer);
+        site.catchmentLayers.forEach(l=>map.removeLayer(l));
+      }
+      sites = sites.filter(s=>s.id!==id);
+      renderSiteList();
+    });
+  });
+}
+
+function fitMapToSites(){
+  const layers = sites.map(s=>L.geoJSON(s.geom));
+  if(!layers.length) return;
+  const group = L.featureGroup(layers);
+  map.fitBounds(group.getBounds(), { padding:[40,40] });
+}
+
+/* =========================================================
+   Street network via OpenStreetMap's Overpass API — the same
+   backend QuickOSM uses. Esri's public World_Transportation
+   service is a pre-rendered tile basemap (no Query capability),
+   so there's no ArcGIS equivalent to pull real road geometry/names
+   from — Overpass is the only practical free source for this.
+========================================================= */
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+
+// Ways considered walkable — excludes motorways/trunk roads (not walkable)
+// and anything explicitly tagged as foot- or access-restricted.
+const OSM_WALKABLE_FILTER = 'way["highway"]["highway"!~"^(motorway|motorway_link|trunk|trunk_link|construction|proposed|raceway|razed)$"]["foot"!~"^(no|private)$"]["access"!~"^(private|no)$"]';
+
+function largestRing(geom){
+  const rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p => p[0]);
+  return rings.reduce((a,b) => b.length > a.length ? b : a);
+}
+
+// Overpass's "poly" filter wants "lat lon lat lon ..." (space-separated, lat first)
+function ringToOverpassPoly(ring){
+  return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
+}
+
+async function fetchWalkableNetwork(queryGeom){
+  const poly = ringToOverpassPoly(largestRing(queryGeom));
+  const query = `[out:json][timeout:30];${OSM_WALKABLE_FILTER}(poly:"${poly}");out geom;`;
+  const resp = await fetch(withProxy(OVERPASS_URL), {
+    method:'POST',
+    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
+  const json = await resp.json();
+  return (json.elements || []).filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
+}
+
+/* =========================================================
+   Graph + Dijkstra — nodes are deduplicated by rounded coordinate
+   (OSM shares the exact same lat/lon at a junction, so this reliably
+   detects where ways connect without needing raw node IDs), edges
+   weighted by haversine distance in metres.
+========================================================= */
+function haversine(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const toRad = d => d*Math.PI/180;
+  const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function buildGraph(ways){
+  const nodes = new Map();
+  const nodeKey = (lat, lon) => lat.toFixed(6)+','+lon.toFixed(6);
+  const getNode = (lat, lon) => {
+    const k = nodeKey(lat, lon);
+    if(!nodes.has(k)) nodes.set(k, { lat, lon, edges: [] });
+    return k;
+  };
+  ways.forEach(el=>{
+    for(let i=0;i<el.geometry.length-1;i++){
+      const a = el.geometry[i], b = el.geometry[i+1];
+      const ka = getNode(a.lat, a.lon), kb = getNode(b.lat, b.lon);
+      if(ka === kb) continue;
+      const dist = haversine(a.lat, a.lon, b.lat, b.lon);
+      nodes.get(ka).edges.push({ to: kb, dist });
+      nodes.get(kb).edges.push({ to: ka, dist });
+    }
+  });
+  return nodes;
+}
+
+function nearestNode(nodes, lat, lon){
+  let best = null, bestDist = Infinity;
+  nodes.forEach((n, k)=>{
+    const d = haversine(lat, lon, n.lat, n.lon);
+    if(d < bestDist){ bestDist = d; best = k; }
+  });
+  return { key: best, dist: bestDist };
+}
+
+// Array-based priority queue — fine for the node counts a ~1200m
+// pedestrian-network buffer produces (typically hundreds to low
+// thousands); a binary heap would be the next optimisation if a very
+// dense urban network ever makes this noticeably slow.
+function dijkstra(nodes, startKey, maxDist){
+  const dist = new Map();
+  dist.set(startKey, 0);
+  const visited = new Set();
+  const pq = [[0, startKey]];
+  while(pq.length){
+    pq.sort((a,b)=>a[0]-b[0]);
+    const [d, u] = pq.shift();
+    if(visited.has(u)) continue;
+    visited.add(u);
+    if(d > maxDist) continue;
+    const node = nodes.get(u);
+    if(!node) continue;
+    node.edges.forEach(({to, dist:w})=>{
+      const nd = d + w;
+      if(nd > maxDist) return;
+      if(!dist.has(to) || nd < dist.get(to)){
+        dist.set(to, nd);
+        pq.push([nd, to]);
+      }
+    });
+  }
+  return dist;
+}
+
+// Every edge with at least one reachable endpoint, trimmed (by linear
+// interpolation) to exactly the threshold distance where it crosses it.
+function edgesAtThreshold(nodes, dist, threshold){
+  const segments = [];
+  const seen = new Set();
+  nodes.forEach((node, u)=>{
+    const du = dist.get(u);
+    if(du === undefined || du > threshold) return;
+    node.edges.forEach(({to:v, dist:w})=>{
+      const edgeKey = u < v ? u+'|'+v : v+'|'+u;
+      if(seen.has(edgeKey)) return;
+      seen.add(edgeKey);
+      const nodeV = nodes.get(v);
+      const dv = dist.get(v);
+      if(dv !== undefined && dv <= threshold){
+        segments.push([[node.lon, node.lat], [nodeV.lon, nodeV.lat]]);
+      } else {
+        const remaining = threshold - du;
+        const t = Math.max(0, Math.min(1, remaining / w));
+        const midLat = node.lat + (nodeV.lat - node.lat) * t;
+        const midLon = node.lon + (nodeV.lon - node.lon) * t;
+        segments.push([[node.lon, node.lat], [midLon, midLat]]);
+      }
+    });
+  });
+  return segments;
+}
+
+// Buffers the reachable street corridor into a polygon, then unions in
+// the site polygon itself so the catchment always fully covers the site
+// (not just a thin corridor starting at whichever node it snapped to).
+function isochronePolygon(segments, corridorM, siteGeom){
+  const parts = [];
+  if(segments.length){
+    const mls = { type:'Feature', properties:{}, geometry:{ type:'MultiLineString', coordinates: segments } };
+    parts.push(turf.buffer(mls, corridorM/1000, { units:'kilometers', steps:8 }));
+  }
+  parts.push(turf.buffer(turf.feature(siteGeom), corridorM/1000, { units:'kilometers', steps:8 }));
+  let merged = parts[0];
+  for(let i=1;i<parts.length;i++){
+    try{ merged = turf.union(merged, parts[i]); }
+    catch(e){ /* keep what we have if a union fails on a bad geometry */ }
+  }
+  return merged;
+}
+
+/* =========================================================
+   Generate catchments for every site
+========================================================= */
+document.getElementById('runCatchments').addEventListener('click', runCatchments);
+
+async function runCatchments(){
+  if(!sites.length){ alert('Upload at least one site polygon first.'); return; }
+  const maxDistance = Math.max(1, +document.getElementById('maxDistance').value || 1200);
+  const interval = Math.max(1, +document.getElementById('interval').value || 400);
+  const corridorWidth = Math.max(1, +document.getElementById('corridorWidth').value || 20);
+  const thresholds = [];
+  for(let t=interval; t<maxDistance; t+=interval) thresholds.push(t);
+  thresholds.push(maxDistance);
+
+  const btn = document.getElementById('runCatchments');
+  const statusEl = document.getElementById('runStatus');
+  btn.disabled = true;
+  document.getElementById('loadingOverlay').classList.add('show');
+  statusEl.innerHTML = '';
+
+  const resultsEl = document.getElementById('resultsList');
+  resultsEl.innerHTML = '';
+  document.getElementById('resultsSection').style.display = 'block';
+
+  for(const site of sites){
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    resultsEl.appendChild(card);
+
+    if(site.siteLayer) map.removeLayer(site.siteLayer);
+    site.catchmentLayers.forEach(l=>map.removeLayer(l));
+    site.catchmentLayers = [];
+
+    try{
+      const centroid = turf.centroid(turf.feature(site.geom)).geometry.coordinates; // [lon, lat]
+
+      // Query area: site buffered outward by max distance plus a safety
+      // margin, so the network fetch fully covers the catchment we're about to compute.
+      const queryArea = turf.buffer(turf.feature(site.geom), (maxDistance * 1.3) / 1000, { units:'kilometers', steps:16 });
+      const ways = await fetchWalkableNetwork(queryArea.geometry);
+      if(!ways.length) throw new Error('No walkable streets/footpaths found from OpenStreetMap near this site.');
+
+      const nodes = buildGraph(ways);
+      const { key: startKey, dist: snapDist } = nearestNode(nodes, centroid[1], centroid[0]);
+      if(!startKey) throw new Error('Could not find a network node to start from.');
+
+      const dist = dijkstra(nodes, startKey, maxDistance);
+
+      site.catchments = thresholds.map(threshold=>{
+        const segments = edgesAtThreshold(nodes, dist, threshold);
+        const poly = isochronePolygon(segments, corridorWidth, site.geom);
+        return { threshold, feature: poly ? { type:'Feature', properties:{ site: site.name, distance_m: threshold }, geometry: poly.geometry } : null };
+      }).filter(c => c.feature);
+
+      // Draw largest-first so smaller (closer) catchments render on top
+      [...site.catchments].reverse().forEach((c, idx)=>{
+        const shade = 0.25 + 0.5 * (idx / Math.max(1, site.catchments.length-1));
+        const layer = L.geoJSON(c.feature, {
+          style:{ color: site.color, weight:1.5, fillColor: site.color, fillOpacity: shade * 0.5 }
+        }).addTo(map);
+        layer.bindTooltip(`${site.name} — ${c.threshold}m walk`, { sticky:true });
+        site.catchmentLayers.push(layer);
+      });
+
+      site.siteLayer = L.geoJSON(site.geom, {
+        pane:'sitePane',
+        style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 }
+      }).addTo(map);
+      site.siteLayer.bindTooltip(site.name, { sticky:true });
+
+      card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+        <div class="rc-body">${site.catchments.length} catchment(s): ${site.catchments.map(c=>c.threshold+'m').join(', ')}. Snapped to street network ${snapDist.toFixed(0)}m from site centroid.</div>`;
+
+    }catch(err){
+      site.catchments = null;
+      card.classList.add('error');
+      card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+        <div class="rc-body">Could not generate catchments (${err.message}).</div>`;
+    }
+  }
+
+  renderLegend(thresholds);
+  renderExportList();
+
+  btn.disabled = false;
+  document.getElementById('loadingOverlay').classList.remove('show');
+}
+
+function renderLegend(thresholds){
+  const box = document.getElementById('legendBox');
+  if(!thresholds.length){ box.style.display = 'none'; return; }
+  box.innerHTML = `<div style="font-weight:600;margin-bottom:2px;">Walking distance</div>` +
+    thresholds.map((t,i)=>{
+      const shade = 0.25 + 0.5 * (1 - i / Math.max(1, thresholds.length-1));
+      return `<div class="lg-row"><span class="lg-swatch" style="background:rgba(59,85,103,${shade});"></span><span>${t}m</span></div>`;
+    }).join('');
+  box.style.display = 'block';
+}
+
+/* =========================================================
+   Export — GeoJSON / Shapefile per catchment, plus a bulk zip.
+   Shapefile writer, QML styling, and downloadBlob are copied
+   verbatim from GroundPatch (index.html) — generic utility code,
+   not specific to that tool.
+========================================================= */
+function downloadBlob(filename, content, type){
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 2000);
+}
+
+function shpShapeTypeFor(geomType){ return /Polygon/.test(geomType) ? 5 : 3; }
+
+function ringsFromGeometry(geom){
+  if(geom.type === 'Polygon') return geom.coordinates;
+  if(geom.type === 'MultiPolygon') return geom.coordinates.flat();
+  if(geom.type === 'LineString') return [geom.coordinates];
+  if(geom.type === 'MultiLineString') return geom.coordinates;
+  return [];
+}
+
+function writeShpHeader(dv, shapeType, fileLenWords, xmin, ymin, xmax, ymax){
+  dv.setInt32(0, 9994, false);
+  dv.setInt32(24, fileLenWords, false);
+  dv.setInt32(28, 1000, true);
+  dv.setInt32(32, shapeType, true);
+  dv.setFloat64(36, xmin, true);
+  dv.setFloat64(44, ymin, true);
+  dv.setFloat64(52, xmax, true);
+  dv.setFloat64(60, ymax, true);
+}
+
+function buildShpAndShx(features){
+  const geomType = features[0].geometry.type;
+  const shapeType = shpShapeTypeFor(geomType);
+  let xmin=Infinity, ymin=Infinity, xmax=-Infinity, ymax=-Infinity;
+  const recordContents = [];
+
+  features.forEach(f=>{
+    const rings = ringsFromGeometry(f.geometry);
+    const parts = [];
+    const points = [];
+    rings.forEach(ring=>{
+      parts.push(points.length);
+      ring.forEach(([x,y])=>{
+        points.push([x,y]);
+        if(x<xmin)xmin=x; if(x>xmax)xmax=x;
+        if(y<ymin)ymin=y; if(y>ymax)ymax=y;
+      });
+    });
+    let fxmin=Infinity, fymin=Infinity, fxmax=-Infinity, fymax=-Infinity;
+    points.forEach(([x,y])=>{ if(x<fxmin)fxmin=x; if(x>fxmax)fxmax=x; if(y<fymin)fymin=y; if(y>fymax)fymax=y; });
+    const numParts = parts.length, numPoints = points.length;
+    const contentBytes = 4+32+4+4 + numParts*4 + numPoints*16;
+    const buf = new ArrayBuffer(contentBytes);
+    const dv = new DataView(buf);
+    let off = 0;
+    dv.setInt32(off, shapeType, true); off += 4;
+    dv.setFloat64(off, fxmin, true); off += 8;
+    dv.setFloat64(off, fymin, true); off += 8;
+    dv.setFloat64(off, fxmax, true); off += 8;
+    dv.setFloat64(off, fymax, true); off += 8;
+    dv.setInt32(off, numParts, true); off += 4;
+    dv.setInt32(off, numPoints, true); off += 4;
+    parts.forEach(p=>{ dv.setInt32(off, p, true); off += 4; });
+    points.forEach(([x,y])=>{ dv.setFloat64(off, x, true); off += 8; dv.setFloat64(off, y, true); off += 8; });
+    recordContents.push(buf);
+  });
+
+  const headerLen = 100;
+  let totalContentLen = 0;
+  recordContents.forEach(c => totalContentLen += 8 + c.byteLength);
+  const shpBuf = new ArrayBuffer(headerLen + totalContentLen);
+  const shpDv = new DataView(shpBuf);
+  writeShpHeader(shpDv, shapeType, (headerLen + totalContentLen)/2, xmin, ymin, xmax, ymax);
+
+  const shxBuf = new ArrayBuffer(headerLen + recordContents.length*8);
+  const shxDv = new DataView(shxBuf);
+  writeShpHeader(shxDv, shapeType, (headerLen + recordContents.length*8)/2, xmin, ymin, xmax, ymax);
+
+  let shpByteOffset = headerLen, shxOff = headerLen;
+  recordContents.forEach((content, i)=>{
+    const contentWords = content.byteLength / 2;
+    const recordOffsetWords = shpByteOffset / 2;
+    shxDv.setInt32(shxOff, recordOffsetWords, false); shxOff += 4;
+    shxDv.setInt32(shxOff, contentWords, false); shxOff += 4;
+    shpDv.setInt32(shpByteOffset, i+1, false); shpByteOffset += 4;
+    shpDv.setInt32(shpByteOffset, contentWords, false); shpByteOffset += 4;
+    new Uint8Array(shpBuf, shpByteOffset, content.byteLength).set(new Uint8Array(content));
+    shpByteOffset += content.byteLength;
+  });
+
+  return { shpBuf, shxBuf };
+}
+
+function buildDbf(features){
+  const rawKeys = [];
+  features.forEach(f=> Object.keys(f.properties||{}).forEach(k=>{ if(!rawKeys.includes(k)) rawKeys.push(k); }));
+  if(rawKeys.length === 0) rawKeys.push('id');
+
+  const usedNames = new Set();
+  const fieldMap = rawKeys.map(k=>{
+    let name = k.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,10);
+    if(!name) name = 'FIELD';
+    let base = name, n = 1;
+    while(usedNames.has(name)){ name = (base.slice(0, 10-String(n).length) + n); n++; }
+    usedNames.add(name);
+    return { orig:k, name };
+  });
+
+  const fieldLengths = fieldMap.map(fm=>{
+    let maxLen = fm.name.length;
+    features.forEach(f=>{
+      const v = f.properties ? f.properties[fm.orig] : undefined;
+      const s = (v===null||v===undefined) ? '' : String(v);
+      if(s.length > maxLen) maxLen = s.length;
+    });
+    return Math.min(Math.max(maxLen,1), 254);
+  });
+
+  const numFields = fieldMap.length;
+  const numRecords = features.length;
+  const headerLen = 32 + numFields*32 + 1;
+  const recordLen = 1 + fieldLengths.reduce((a,b)=>a+b,0);
+  const totalLen = headerLen + recordLen*numRecords + 1;
+
+  const buf = new ArrayBuffer(totalLen);
+  const dv = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  const enc = new TextEncoder();
+
+  const now = new Date();
+  dv.setUint8(0, 0x03);
+  dv.setUint8(1, now.getFullYear()-1900);
+  dv.setUint8(2, now.getMonth()+1);
+  dv.setUint8(3, now.getDate());
+  dv.setUint32(4, numRecords, true);
+  dv.setUint16(8, headerLen, true);
+  dv.setUint16(10, recordLen, true);
+
+  let off = 32;
+  fieldMap.forEach((fm, i)=>{
+    bytes.set(enc.encode(fm.name).slice(0,10), off);
+    dv.setUint8(off+11, 0x43);
+    dv.setUint32(off+12, 0, true);
+    dv.setUint8(off+16, fieldLengths[i]);
+    dv.setUint8(off+17, 0);
+    off += 32;
+  });
+  dv.setUint8(off, 0x0D); off += 1;
+
+  features.forEach(f=>{
+    dv.setUint8(off, 0x20); off += 1;
+    fieldMap.forEach((fm, i)=>{
+      const v = f.properties ? f.properties[fm.orig] : undefined;
+      const s = (v===null||v===undefined) ? '' : String(v);
+      const len = fieldLengths[i];
+      const truncated = s.length > len ? s.slice(0,len) : s;
+      const strBytes = enc.encode(truncated).slice(0,len);
+      bytes.set(strBytes, off);
+      for(let j=strBytes.length;j<len;j++) bytes[off+j] = 0x20;
+      off += len;
+    });
+  });
+  dv.setUint8(off, 0x1A);
+  return buf;
+}
+
+const PRJ_WGS84 = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
+
+function buildShapefileParts(normalizedGeojson){
+  const features = normalizedGeojson.features.filter(f => f && f.geometry);
+  if(!features.length) throw new Error('No features to export');
+  const { shpBuf, shxBuf } = buildShpAndShx(features);
+  const dbfBuf = buildDbf(features);
+  return { shp: shpBuf, shx: shxBuf, dbf: dbfBuf, prj: PRJ_WGS84 };
+}
+
+function normalizeGeomType(fc){
+  const features = fc.features.map(f=>{
+    if(!f || !f.geometry) return f;
+    let geom = f.geometry;
+    if(geom.type === 'Polygon'){
+      geom = { type:'MultiPolygon', coordinates:[geom.coordinates] };
+    } else if(geom.type === 'LineString'){
+      geom = { type:'MultiLineString', coordinates:[geom.coordinates] };
+    }
+    return { type:'Feature', properties: f.properties, geometry: geom };
+  }).filter(Boolean);
+  return { type:'FeatureCollection', features };
+}
+
+function xmlEscape(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function parseColorToRgb(cssColor){
+  if(!cssColor) return [128,128,128];
+  if(cssColor.startsWith('#')){
+    const hex = cssColor.slice(1);
+    return [parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16)];
+  }
+  return [128,128,128];
+}
+function buildSymbolXML(id, rgb, opacity){
+  const [r,g,b] = rgb;
+  return `<symbol type="fill" name="${id}" alpha="${opacity}" force_rhr="0">
+    <layer class="SimpleFill" enabled="1">
+      <Option type="Map">
+        <Option type="QString" name="color" value="${r},${g},${b},255"/>
+        <Option type="QString" name="outline_color" value="${r},${g},${b},255"/>
+        <Option type="QString" name="outline_width" value="0.3"/>
+        <Option type="QString" name="outline_width_unit" value="MM"/>
+        <Option type="QString" name="style" value="solid"/>
+      </Option>
+    </layer>
+  </symbol>`;
+}
+function buildQML(color){
+  const [r,g,b] = parseColorToRgb(color);
+  return `<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.28" styleCategories="Symbology">
+  <renderer-v2 type="singleSymbol" forceraster="0" enableorderby="0">
+    <symbols>
+      ${buildSymbolXML(0, [r,g,b], 0.5)}
+    </symbols>
+  </renderer-v2>
+</qgis>`;
+}
+
+async function exportShapefile(geojson, filenameBase, color, btn){
+  const original = btn ? btn.textContent : null;
+  if(btn){ btn.disabled = true; btn.textContent = '…'; }
+  try{
+    const parts = buildShapefileParts(normalizeGeomType(geojson));
+    const zip = new JSZip();
+    zip.file(filenameBase + '.shp', parts.shp);
+    zip.file(filenameBase + '.shx', parts.shx);
+    zip.file(filenameBase + '.dbf', parts.dbf);
+    zip.file(filenameBase + '.prj', parts.prj);
+    zip.file(filenameBase + '.qml', buildQML(color));
+    const result = await zip.generateAsync({ type:'blob' });
+    downloadBlob(filenameBase + '.zip', result, 'application/zip');
+  }catch(err){
+    alert('Shapefile export failed (' + err.message + '). GeoJSON works reliably instead.');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+function renderExportList(){
+  const el = document.getElementById('exportList');
+  el.innerHTML = '';
+  const anyCatchments = sites.some(s=>s.catchments && s.catchments.length);
+  document.getElementById('exportSection').style.display = anyCatchments ? 'block' : 'none';
+  if(!anyCatchments) return;
+
+  sites.filter(s=>s.catchments && s.catchments.length).forEach(site=>{
+    site.catchments.forEach(c=>{
+      const slug = (site.name + '_' + c.threshold + 'm').replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+      const row = document.createElement('div');
+      row.className = 'export-row';
+      row.innerHTML = `<span class="name">${site.name} — ${c.threshold}m</span>
+        <button data-geo>GeoJSON</button>
+        <button data-shp>Shapefile</button>`;
+      el.appendChild(row);
+      row.querySelector('[data-geo]').addEventListener('click', ()=>{
+        downloadBlob(slug + '.geojson', JSON.stringify({ type:'FeatureCollection', features:[c.feature] }), 'application/geo+json');
+      });
+      row.querySelector('[data-shp]').addEventListener('click', (e)=>{
+        exportShapefile({ type:'FeatureCollection', features:[c.feature] }, slug, site.color, e.target);
+      });
+    });
+  });
+}
+
+document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
+  const btn = document.getElementById('downloadAllZip');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Zipping…';
+  try{
+    const masterZip = new JSZip();
+    let any = false;
+    for(const site of sites){
+      if(!site.catchments || !site.catchments.length) continue;
+      for(const c of site.catchments){
+        any = true;
+        const slug = (site.name + '_' + c.threshold + 'm').replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+        const normalized = normalizeGeomType({ type:'FeatureCollection', features:[c.feature] });
+        const parts = buildShapefileParts(normalized);
+        const folder = masterZip.folder(slug);
+        folder.file(slug + '.shp', parts.shp);
+        folder.file(slug + '.shx', parts.shx);
+        folder.file(slug + '.dbf', parts.dbf);
+        folder.file(slug + '.prj', parts.prj);
+        folder.file(slug + '.qml', buildQML(site.color));
+        folder.file(slug + '.geojson', JSON.stringify({ type:'FeatureCollection', features:[c.feature] }));
+      }
+    }
+    if(!any){ alert('Nothing to export yet — generate catchments first.'); return; }
+    const result = await masterZip.generateAsync({ type:'blob' });
+    downloadBlob('stridepatch-catchments.zip', result, 'application/zip');
+  }catch(err){
+    alert('Zip export failed: ' + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = original;
+  }
+});
+</script>
+</body>
+</html>
