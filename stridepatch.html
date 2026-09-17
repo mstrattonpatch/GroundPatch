@@ -99,6 +99,14 @@
     border-bottom:1px solid var(--line);
   }
 
+  .mode-tabs{ display:flex; gap:2px; margin-bottom:18px; border:1px solid var(--line); border-radius:2px; overflow:hidden; }
+  .mode-tab{
+    flex:1; border:none; border-radius:0; background:#fff; color:var(--ink-soft);
+    font-size:11.5px; font-weight:600; padding:8px 6px;
+  }
+  .mode-tab.active{ background:var(--moss); color:#fff; }
+  .mode-tab:hover:not(.active){ background:var(--moss-soft); border-color:var(--line); }
+
   #dropzone{
     border:1.5px dashed var(--line);
     background:#fff;
@@ -206,6 +214,11 @@
 
   <div id="sidebar-scroll">
 
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="tabCatchments">Walkability Catchments</button>
+      <button class="mode-tab" id="tabLmr">LMR Compliance Check</button>
+    </div>
+
     <section>
       <h2>Sites</h2>
       <div id="dropzone">
@@ -217,34 +230,65 @@
       <div id="siteList" style="margin-top:8px;"></div>
     </section>
 
-    <section>
-      <h2>Catchment settings</h2>
-      <div class="field-row">
-        <div>
-          <label class="field">Max distance (m)</label>
-          <input type="number" id="maxDistance" value="1200" min="100" step="100">
+    <div id="catchmentModePanel">
+      <section>
+        <h2>Catchment settings</h2>
+        <div class="field-row">
+          <div>
+            <label class="field">Max distance (m)</label>
+            <input type="number" id="maxDistance" value="1200" min="100" step="100">
+          </div>
+          <div>
+            <label class="field">Interval (m)</label>
+            <input type="number" id="interval" value="400" min="50" step="50">
+          </div>
         </div>
-        <div>
-          <label class="field">Interval (m)</label>
-          <input type="number" id="interval" value="400" min="50" step="50">
-        </div>
-      </div>
-      <label class="field">Walking corridor width (m) — how wide each street is drawn</label>
-      <input type="number" id="corridorWidth" value="20" min="5" step="5" style="margin-bottom:10px;">
-      <button class="primary" id="runCatchments">Generate catchments</button>
-      <div id="runStatus" style="margin-top:6px;font-size:12px;"></div>
-    </section>
+        <label class="field">Walking corridor width (m) — how wide each street is drawn</label>
+        <input type="number" id="corridorWidth" value="20" min="5" step="5" style="margin-bottom:10px;">
+        <button class="primary" id="runCatchments">Generate catchments</button>
+        <div id="runStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
 
-    <section id="resultsSection" style="display:none;">
-      <h2>Results</h2>
-      <div id="resultsList"></div>
-    </section>
+      <section id="resultsSection" style="display:none;">
+        <h2>Results</h2>
+        <div id="resultsList"></div>
+      </section>
 
-    <section id="exportSection" style="display:none;">
-      <h2>Export</h2>
-      <div id="exportList"></div>
-      <button class="secondary" id="downloadAllZip" style="margin-top:8px;">Download everything (.zip)</button>
-    </section>
+      <section id="exportSection" style="display:none;">
+        <h2>Export</h2>
+        <div id="exportList"></div>
+        <button class="secondary" id="downloadAllZip" style="margin-top:8px;">Download everything (.zip)</button>
+      </section>
+    </div>
+
+    <div id="lmrModePanel" style="display:none;">
+      <section>
+        <h2>Reference point</h2>
+        <p style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">The Town Centre point or station entrance sites are measured against — per Housing SEPP Sch 10, click the specific point on the map (e.g. the mapped Town Centre boundary edge, or the station entrance).</p>
+        <button class="secondary" id="setRefPoint">Click map to set point</button>
+        <div id="refPointStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section>
+        <h2>LMR settings</h2>
+        <label class="field">Average dwelling size (m² GFA) — for indicative yield only</label>
+        <input type="number" id="avgDwellingSize" value="85" min="10" step="5" style="margin-bottom:10px;">
+        <p style="font-size:11px;color:var(--ink-soft);margin:0 0 10px;line-height:1.5;">Inner area (≤400m) = 2.2:1 FSR, Outer area (400–800m) = 1.5:1 FSR, per Housing SEPP s180. Arterial roads = OSM primary/secondary/trunk ways (a proxy — supply a TfNSW classified-roads service URL if you need the authoritative dataset). Restricted scenario only allows crossing an arterial at a tagged pedestrian crossing or traffic signal.</p>
+        <button class="primary" id="runLmrCheck">Run compliance check</button>
+        <div id="lmrRunStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section id="lmrResultsSection" style="display:none;">
+        <h2>Results</h2>
+        <div id="lmrResultsList"></div>
+      </section>
+
+      <section id="lmrExportSection" style="display:none;">
+        <h2>Export</h2>
+        <button class="secondary" id="downloadLmrCsv">Download comparison table (.csv)</button>
+        <div id="lmrExportList" style="margin-top:8px;"></div>
+      </section>
+    </div>
 
   </div>
 </div>
@@ -270,6 +314,47 @@ L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(m
 
 map.createPane('sitePane');
 map.getPane('sitePane').style.zIndex = 650; // sites always render above their own catchments
+map.createPane('refPane');
+map.getPane('refPane').style.zIndex = 660; // reference point marker always on top of everything
+
+/* =========================================================
+   Mode switching — Sites are shared between both modes; each
+   mode has its own settings/results/export panel.
+========================================================= */
+const tabCatchments = document.getElementById('tabCatchments');
+const tabLmr = document.getElementById('tabLmr');
+tabCatchments.addEventListener('click', ()=> setMode('catchments'));
+tabLmr.addEventListener('click', ()=> setMode('lmr'));
+function setMode(mode){
+  const isLmr = mode === 'lmr';
+  tabCatchments.classList.toggle('active', !isLmr);
+  tabLmr.classList.toggle('active', isLmr);
+  document.getElementById('catchmentModePanel').style.display = isLmr ? 'none' : 'block';
+  document.getElementById('lmrModePanel').style.display = isLmr ? 'block' : 'none';
+}
+
+/* =========================================================
+   Reference point (Town Centre / station entrance) — for the
+   LMR mode, click-to-place on the map.
+========================================================= */
+let refPoint = null; // [lon, lat]
+let refPointMarker = null;
+let settingRefPoint = false;
+
+document.getElementById('setRefPoint').addEventListener('click', ()=>{
+  settingRefPoint = true;
+  document.getElementById('refPointStatus').innerHTML = '<span class="ok">Click anywhere on the map…</span>';
+});
+
+map.on('click', (e)=>{
+  if(!settingRefPoint) return;
+  settingRefPoint = false;
+  refPoint = [e.latlng.lng, e.latlng.lat];
+  if(refPointMarker) map.removeLayer(refPointMarker);
+  refPointMarker = L.circleMarker(e.latlng, { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+  refPointMarker.bindTooltip('Reference point (Town Centre / Station)', { permanent:false });
+  document.getElementById('refPointStatus').innerHTML = `<span class="ok">Set at ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}</span>`;
+});
 
 /* =========================================================
    CORS proxy — same Cloudflare Worker GroundPatch uses, already
@@ -428,7 +513,8 @@ function renderSiteList(){
       const site = sites.find(s=>s.id===id);
       if(site){
         if(site.siteLayer) map.removeLayer(site.siteLayer);
-        site.catchmentLayers.forEach(l=>map.removeLayer(l));
+        (site.catchmentLayers || []).forEach(l=>map.removeLayer(l));
+        (site.lmrLayers || []).forEach(l=>map.removeLayer(l));
       }
       sites = sites.filter(s=>s.id!==id);
       renderSiteList();
@@ -479,6 +565,29 @@ async function fetchWalkableNetwork(queryGeom){
   return (json.elements || []).filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
 }
 
+// Arterial/classified roads (a proxy via OSM's own road hierarchy tags —
+// primary/secondary/trunk — since the authoritative TfNSW "classified roads"
+// dataset isn't available here) and formal pedestrian crossings (marked
+// crossings and traffic signals), for the LMR restricted-crossing scenario.
+const OSM_ARTERIAL_FILTER = 'way["highway"~"^(primary|primary_link|secondary|secondary_link|trunk|trunk_link)$"]';
+const OSM_CROSSING_FILTER = '(node["highway"="crossing"]["crossing"!~"^(no|informal)$"];node["highway"="traffic_signals"];)';
+
+async function fetchArterialAndCrossings(queryGeom){
+  const poly = ringToOverpassPoly(largestRing(queryGeom));
+  const query = `[out:json][timeout:30];(${OSM_ARTERIAL_FILTER}(poly:"${poly}");${OSM_CROSSING_FILTER}(poly:"${poly}"););out geom;`;
+  const resp = await fetch(withProxy(OVERPASS_URL), {
+    method:'POST',
+    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
+  const json = await resp.json();
+  const elements = json.elements || [];
+  const arterialWays = elements.filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
+  const crossingNodes = elements.filter(el => el.type === 'node' && typeof el.lat === 'number').map(el => ({ lat: el.lat, lon: el.lon }));
+  return { arterialWays, crossingNodes };
+}
+
 /* =========================================================
    Graph + Dijkstra — nodes are deduplicated by rounded coordinate
    (OSM shares the exact same lat/lon at a junction, so this reliably
@@ -527,8 +636,12 @@ function nearestNode(nodes, lat, lon){
 // pedestrian-network buffer produces (typically hundreds to low
 // thousands); a binary heap would be the next optimisation if a very
 // dense urban network ever makes this noticeably slow.
-function dijkstra(nodes, startKey, maxDist){
+// blockedNodes (optional): a Set of node keys that can't be routed through —
+// used by the LMR restricted-crossing scenario. Returns {dist, prev} so a
+// specific shortest-path route can be reconstructed, not just its length.
+function dijkstra(nodes, startKey, maxDist, blockedNodes){
   const dist = new Map();
+  const prev = new Map();
   dist.set(startKey, 0);
   const visited = new Set();
   const pq = [[0, startKey]];
@@ -541,15 +654,78 @@ function dijkstra(nodes, startKey, maxDist){
     const node = nodes.get(u);
     if(!node) continue;
     node.edges.forEach(({to, dist:w})=>{
+      if(blockedNodes && blockedNodes.has(to)) return; // can't route through a blocked crossing
       const nd = d + w;
       if(nd > maxDist) return;
       if(!dist.has(to) || nd < dist.get(to)){
         dist.set(to, nd);
+        prev.set(to, u);
         pq.push([nd, to]);
       }
     });
   }
-  return dist;
+  return { dist, prev };
+}
+
+function reconstructPath(prev, startKey, endKey){
+  if(startKey === endKey) return [startKey];
+  const path = [endKey];
+  let cur = endKey;
+  while(cur !== startKey){
+    if(!prev.has(cur)) return null; // unreachable
+    cur = prev.get(cur);
+    path.push(cur);
+  }
+  return path.reverse();
+}
+
+function pathToLineString(nodes, path){
+  return { type:'LineString', coordinates: path.map(k => { const n = nodes.get(k); return [n.lon, n.lat]; }) };
+}
+
+/* =========================================================
+   Arterial-crossing restriction (LMR mode) — a graph node lying on/very
+   near an arterial way is a point where a pedestrian would cross it; if
+   that point isn't also near a tagged pedestrian crossing/signal, block
+   routing through it entirely in the restricted scenario. Validated
+   offline against a synthetic grid split by an arterial with one legal
+   crossing — the restricted route correctly detours through it.
+========================================================= */
+function findBlockedNodes(nodes, arterialWays, crossingNodes, onRoadTolM, safeTolM){
+  const arterialLines = arterialWays.map(w => turf.lineString(w.geometry.map(p=>[p.lon,p.lat])));
+  const blocked = new Set();
+  nodes.forEach((n, k)=>{
+    const p = turf.point([n.lon, n.lat]);
+    const onArterial = arterialLines.some(line => turf.pointToLineDistance(p, line, { units:'kilometers' }) * 1000 <= onRoadTolM);
+    if(!onArterial) return;
+    const nearSafe = crossingNodes.some(c => haversine(n.lat, n.lon, c.lat, c.lon) <= safeTolM);
+    if(!nearSafe) blocked.add(k);
+  });
+  return blocked;
+}
+
+const ARTERIAL_ON_ROAD_TOLERANCE_M = 3;  // how close a footway node must be to an arterial way's line to count as touching it
+const SAFE_CROSSING_TOLERANCE_M = 20;    // how close that point must be to a tagged crossing/signal to count as safe
+
+/* =========================================================
+   LMR yield — Housing SEPP s180 non-discretionary FSR standards,
+   applied to a site's own area (not the catchment area) since
+   classification under s163 is all-or-nothing per site.
+========================================================= */
+const LMR_INNER_FSR = 2.2, LMR_OUTER_FSR = 1.5;
+function classifyLmr(distanceM){
+  if(distanceM === undefined || distanceM === null) return 'unreachable';
+  if(distanceM <= 400) return 'inner';
+  if(distanceM <= 800) return 'outer';
+  return 'none';
+}
+function indicativeYield(siteAreaM2, classification, avgDwellingM2){
+  const fsr = classification === 'inner' ? LMR_INNER_FSR : classification === 'outer' ? LMR_OUTER_FSR : 0;
+  if(!fsr) return 0;
+  return Math.floor((siteAreaM2 * fsr) / avgDwellingM2);
+}
+function classificationLabel(c){
+  return c==='inner' ? 'Inner area (≤400m)' : c==='outer' ? 'Outer area (400–800m)' : c==='unreachable' ? 'Unreachable on network' : 'Outside LMR area (>800m)';
 }
 
 // Every edge with at least one reachable endpoint, trimmed (by linear
@@ -649,7 +825,7 @@ async function runCatchments(){
       const { key: startKey, dist: snapDist } = nearestNode(nodes, centroid[1], centroid[0]);
       if(!startKey) throw new Error('Could not find a network node to start from.');
 
-      const dist = dijkstra(nodes, startKey, maxDistance);
+      const { dist } = dijkstra(nodes, startKey, maxDistance);
 
       site.catchments = thresholds.map(threshold=>{
         const segments = edgesAtThreshold(nodes, dist, threshold);
@@ -690,6 +866,168 @@ async function runCatchments(){
   btn.disabled = false;
   document.getElementById('loadingOverlay').classList.remove('show');
 }
+
+/* =========================================================
+   LMR compliance check — site-to-reference-point walking distance,
+   unrestricted vs. arterial-crossing-restricted, per Housing SEPP
+   Sch 10 / Ch 6 and Metis Developments Pty Ltd v Mosman Municipal
+   Council [2026] NSWLEC 1610.
+========================================================= */
+document.getElementById('runLmrCheck').addEventListener('click', runLmrCheck);
+
+let lmrResults = []; // per-site result objects, for export
+
+async function runLmrCheck(){
+  if(!refPoint){ alert('Set a reference point (Town Centre / station) first.'); return; }
+  if(!sites.length){ alert('Upload at least one site polygon first.'); return; }
+  const avgDwellingM2 = Math.max(1, +document.getElementById('avgDwellingSize').value || 85);
+
+  const btn = document.getElementById('runLmrCheck');
+  const statusEl = document.getElementById('lmrRunStatus');
+  btn.disabled = true;
+  document.getElementById('loadingOverlay').classList.add('show');
+  statusEl.innerHTML = '';
+
+  const resultsEl = document.getElementById('lmrResultsList');
+  resultsEl.innerHTML = '';
+  document.getElementById('lmrResultsSection').style.display = 'block';
+
+  sites.forEach(s=>{
+    (s.lmrLayers || []).forEach(l=>map.removeLayer(l));
+    s.lmrLayers = [];
+  });
+  lmrResults = [];
+
+  try{
+    // Query area: a circle covering the reference point and every site,
+    // sized to the farthest site plus the 800m outer LMR threshold and a
+    // safety margin — see the walkability-catchment mode for why a circle
+    // (not a buffered site outline) is used for the Overpass query area.
+    const maxSiteDistKm = Math.max(0, ...sites.map(s=>{
+      const c = turf.centroid(turf.feature(s.geom)).geometry.coordinates;
+      return turf.distance(turf.point(refPoint), turf.point(c), { units:'kilometers' });
+    }));
+    const queryRadiusKm = (maxSiteDistKm*1000 + 800) * 1.3 / 1000;
+    const queryArea = turf.circle(refPoint, queryRadiusKm, { units:'kilometers', steps:32 });
+
+    const ways = await fetchWalkableNetwork(queryArea.geometry);
+    if(!ways.length) throw new Error('No walkable streets/footpaths found from OpenStreetMap near the reference point.');
+    const { arterialWays, crossingNodes } = await fetchArterialAndCrossings(queryArea.geometry);
+
+    const nodes = buildGraph(ways);
+    const blockedNodes = findBlockedNodes(nodes, arterialWays, crossingNodes, ARTERIAL_ON_ROAD_TOLERANCE_M, SAFE_CROSSING_TOLERANCE_M);
+
+    const { key: refKey } = nearestNode(nodes, refPoint[1], refPoint[0]);
+    if(!refKey) throw new Error('Could not find a street network node near the reference point.');
+
+    const maxCap = 1500; // beyond the 800m outer threshold, generous enough that a real reclassification isn't cut off
+    const unrestricted = dijkstra(nodes, refKey, maxCap, null);
+    const restricted = dijkstra(nodes, refKey, maxCap, blockedNodes);
+
+    if(refPointMarker) map.removeLayer(refPointMarker);
+    refPointMarker = L.circleMarker([refPoint[1], refPoint[0]], { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+    refPointMarker.bindTooltip('Reference point (Town Centre / Station)', { permanent:false });
+
+    for(const site of sites){
+      const card = document.createElement('div');
+      card.className = 'result-card';
+      resultsEl.appendChild(card);
+      site.lmrLayers = [];
+
+      try{
+        // Per the judgment, distance is measured from the site's closest
+        // edge to the route, not its centroid.
+        const ring = turf.polygonToLine(turf.feature(site.geom));
+        const nearestOnSite = turf.nearestPointOnLine(ring, turf.point(refPoint));
+        const siteAnchor = nearestOnSite.geometry.coordinates;
+        const { key: siteKey } = nearestNode(nodes, siteAnchor[1], siteAnchor[0]);
+
+        const distU = unrestricted.dist.get(siteKey);
+        const distR = restricted.dist.get(siteKey);
+        const classU = classifyLmr(distU);
+        const classR = classifyLmr(distR);
+
+        const siteAreaM2 = turf.area(turf.feature(site.geom));
+        const yieldU = indicativeYield(siteAreaM2, classU, avgDwellingM2);
+        const yieldR = indicativeYield(siteAreaM2, classR, avgDwellingM2);
+
+        const pathU = distU !== undefined ? reconstructPath(unrestricted.prev, refKey, siteKey) : null;
+        const pathR = distR !== undefined ? reconstructPath(restricted.prev, refKey, siteKey) : null;
+
+        // Unrestricted route dashed, restricted route solid, same site colour —
+        // visually distinct where the two diverge.
+        if(pathU){
+          const lineU = L.geoJSON(pathToLineString(nodes, pathU), { style:{ color:site.color, weight:3, dashArray:'6,6', opacity:0.85 } }).addTo(map);
+          lineU.bindTooltip(`${site.name} — unrestricted: ${distU.toFixed(0)}m`, { sticky:true });
+          site.lmrLayers.push(lineU);
+        }
+        if(pathR){
+          const lineR = L.geoJSON(pathToLineString(nodes, pathR), { style:{ color:site.color, weight:3, opacity:0.95 } }).addTo(map);
+          lineR.bindTooltip(`${site.name} — restricted: ${distR.toFixed(0)}m`, { sticky:true });
+          site.lmrLayers.push(lineR);
+        }
+        if(site.siteLayer) map.removeLayer(site.siteLayer);
+        site.siteLayer = L.geoJSON(site.geom, { pane:'sitePane', style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 } }).addTo(map);
+        site.lmrLayers.push(site.siteLayer);
+
+        const changed = classU !== classR;
+        const geomU = pathU ? pathToLineString(nodes, pathU) : null;
+        const geomR = pathR ? pathToLineString(nodes, pathR) : null;
+        lmrResults.push({ site, distU, distR, classU, classR, yieldU, yieldR, geomU, geomR, siteAreaM2 });
+
+        card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}${changed ? '<span style="margin-left:auto;background:var(--amber-soft);color:#6b4d14;border-radius:8px;padding:2px 7px;font-size:10.5px;font-weight:600;">reclassified</span>' : ''}</div>
+          <div class="rc-body">
+            <b>Unrestricted</b> (dashed route): ${distU !== undefined ? distU.toFixed(0)+'m' : 'unreachable within 1500m'} — ${classificationLabel(classU)} — indicative yield ${yieldU} dwellings<br>
+            <b>Restricted</b> (solid route — arterial crossings only at signals/marked crossings): ${distR !== undefined ? distR.toFixed(0)+'m' : 'unreachable within 1500m'} — ${classificationLabel(classR)} — indicative yield ${yieldR} dwellings<br>
+            ${changed ? `<b style="color:var(--red);">Yield impact: ${yieldR-yieldU >= 0 ? '+' : ''}${yieldR-yieldU} dwellings</b>` : `Yield impact: none (both ${classificationLabel(classU)})`}
+          </div>`;
+      }catch(err){
+        card.classList.add('error');
+        card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+          <div class="rc-body">Could not compute (${err.message}).</div>`;
+      }
+    }
+
+    renderLmrExportList();
+
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+    document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+function renderLmrExportList(){
+  const el = document.getElementById('lmrExportList');
+  el.innerHTML = '';
+  document.getElementById('lmrExportSection').style.display = lmrResults.length ? 'block' : 'none';
+  lmrResults.forEach(r=>{
+    const slug = r.site.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+    const row = document.createElement('div');
+    row.className = 'export-row';
+    row.innerHTML = `<span class="name">${r.site.name} routes</span><button data-geo>GeoJSON</button>`;
+    el.appendChild(row);
+    row.querySelector('[data-geo]').addEventListener('click', ()=>{
+      const features = [];
+      if(r.geomU) features.push({ type:'Feature', properties:{ site:r.site.name, scenario:'unrestricted', distance_m:r.distU, classification:r.classU, indicative_yield:r.yieldU }, geometry:r.geomU });
+      if(r.geomR) features.push({ type:'Feature', properties:{ site:r.site.name, scenario:'restricted', distance_m:r.distR, classification:r.classR, indicative_yield:r.yieldR }, geometry:r.geomR });
+      downloadBlob(slug + '_lmr_routes.geojson', JSON.stringify({ type:'FeatureCollection', features }), 'application/geo+json');
+    });
+  });
+}
+
+document.getElementById('downloadLmrCsv').addEventListener('click', ()=>{
+  const header = ['site','site_area_m2','unrestricted_distance_m','unrestricted_classification','unrestricted_yield','restricted_distance_m','restricted_classification','restricted_yield','yield_impact','reclassified'];
+  const esc = v => { const s = String(v===undefined||v===null?'':v).replace(/"/g,'""'); return /[",\n]/.test(s) ? `"${s}"` : s; };
+  const rows = lmrResults.map(r => [
+    r.site.name, r.siteAreaM2.toFixed(0),
+    r.distU !== undefined ? r.distU.toFixed(0) : 'unreachable', r.classU, r.yieldU,
+    r.distR !== undefined ? r.distR.toFixed(0) : 'unreachable', r.classR, r.yieldR,
+    r.yieldR - r.yieldU, r.classU !== r.classR ? 'yes' : 'no'
+  ].map(esc).join(','));
+  downloadBlob('lmr_comparison.csv', [header.join(','), ...rows].join('\n'), 'text/csv');
+});
 
 function renderLegend(thresholds){
   const box = document.getElementById('legendBox');
