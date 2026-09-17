@@ -951,14 +951,13 @@ async function fetchLotContainingPoint(pointGeom){
   // coordinates nest one level deeper than a plain Point: [[lon, lat, z]] rather
   // than [lon, lat] — unwrap that before building the Esri point geometry.
   const [lon, lat] = pointGeom.type === 'MultiPoint' ? pointGeom.coordinates[0] : pointGeom.coordinates;
-  const esriPt = { x: lon, y: lat, spatialReference:{ wkid:4326 } };
   const params = new URLSearchParams({
     f:'geojson',
-    geometry: JSON.stringify(esriPt),
+    geometry: `${lon},${lat}`,
     geometryType:'esriGeometryPoint',
     inSR:'4326',
     spatialRel:'esriSpatialRelIntersects',
-    outFields:'planlabel',
+    outFields:'*', // this ArcGIS Server (10.5.1) errors with "Failed to execute query" on a narrow outFields list against this subtyped layer
     returnGeometry:'true',
     outSR:'4326',
     resultRecordCount:'1'
