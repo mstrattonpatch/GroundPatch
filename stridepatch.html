@@ -263,6 +263,13 @@
 
     <div id="lmrModePanel" style="display:none;">
       <section>
+        <h2>Official NSW LMR layers</h2>
+        <p style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">Loads the real Town Centre boundaries and Low/Mid Rise Housing Exclusion areas published by the NSW Planning Portal (Housing SEPP), for whatever's in view on the map right now. Pan/zoom to your site first, then load — click a boundary afterwards to set the reference point to its nearest edge to your site(s).</p>
+        <button class="secondary" id="loadLmrOfficialLayers">Load layers for current map view</button>
+        <div id="lmrOfficialStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section>
         <h2>Reference point</h2>
         <p style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">The Town Centre point or station entrance sites are measured against — per Housing SEPP Sch 10, click the specific point on the map (e.g. the mapped Town Centre boundary edge, or the station entrance).</p>
         <button class="secondary" id="setRefPoint">Click map to set point</button>
@@ -375,13 +382,143 @@ map.on('click', (e)=>{
    through the proxy rather than depend on that.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-const PROXY_HOSTS = ['overpass-api.de', 'overpass.kumi.systems'];
+const PROXY_HOSTS = ['overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee', 'mapprod3.environment.nsw.gov.au'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
   catch(e){ return false; }
 }
 function withProxy(url){
   return needsProxy(url) ? LOCAL_PROXY + encodeURIComponent(url) : url;
+}
+
+/* =========================================================
+   Official NSW LMR layers — Town Centres Map + Low and Mid Rise
+   Housing Exclusion Map, published by the NSW Planning Portal under
+   the Housing SEPP. Confirmed queryable (capabilities: Map,Query,Data)
+   at ePlanning/Planning_Portal_SEPP/MapServer — unlike the DPIE draft
+   service at spatialportalarcgis.dpie.nsw.gov.au/LMR/LMR, which has
+   Query explicitly disabled at both service and layer level.
+   MapServer/12 ("State Environmental Planning Policy (Housing) 2021")
+   lists sublayer 766 = Town Centres Map, 776 = Exclusion Map.
+========================================================= */
+const NSW_SEPP_HOUSING_SERVICE = 'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/ePlanning/Planning_Portal_SEPP/MapServer';
+const LMR_OFFICIAL_LAYERS = [
+  { id: 766, name: 'Town Centres Map', color: '#1a73e8' },
+  { id: 776, name: 'Low and Mid Rise Housing Exclusion Map', color: '#d93025' },
+];
+let lmrOfficialLayerGroup = null;
+let lmrOfficialFeatureCount = 0;
+
+async function fetchArcgisLayerForBounds(layerId, bounds){
+  const envelope = {
+    xmin: bounds.getWest(), ymin: bounds.getSouth(),
+    xmax: bounds.getEast(), ymax: bounds.getNorth(),
+    spatialReference: { wkid: 4326 }
+  };
+  const url = `${NSW_SEPP_HOUSING_SERVICE}/${layerId}/query?` + new URLSearchParams({
+    f: 'geojson',
+    where: '1=1',
+    outFields: '*',
+    geometry: JSON.stringify(envelope),
+    geometryType: 'esriGeometryEnvelope',
+    inSR: '4326',
+    outSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects',
+    resultRecordCount: '500'
+  });
+  const proxiedUrl = withProxy(url);
+  debugLog(`REQUEST → ${proxiedUrl}`);
+  const resp = await fetch(proxiedUrl);
+  const bodyText = await resp.text();
+  if(!resp.ok){
+    throw new Error(`HTTP ${resp.status}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,200) : ''}`);
+  }
+  const gj = JSON.parse(bodyText);
+  if(gj.error){
+    let msg = gj.error.message || 'service returned an error';
+    if(gj.error.details && gj.error.details.length) msg += ' — ' + gj.error.details.join('; ');
+    throw new Error(msg);
+  }
+  debugLog(`RESPONSE ← ${url}\nHTTP ${resp.status} OK — ${(gj.features||[]).length} feature(s)`);
+  return gj.features || [];
+}
+
+document.getElementById('loadLmrOfficialLayers').addEventListener('click', async ()=>{
+  const statusEl = document.getElementById('lmrOfficialStatus');
+  statusEl.innerHTML = '<span>Loading…</span>';
+  if(lmrOfficialLayerGroup) map.removeLayer(lmrOfficialLayerGroup);
+  lmrOfficialLayerGroup = L.layerGroup().addTo(map);
+  lmrOfficialFeatureCount = 0;
+  const bounds = map.getBounds();
+  const errors = [];
+  for(const layerDef of LMR_OFFICIAL_LAYERS){
+    try{
+      const features = await fetchArcgisLayerForBounds(layerDef.id, bounds);
+      features.forEach(f=>{
+        lmrOfficialFeatureCount++;
+        L.geoJSON(f, {
+          style: { color: layerDef.color, weight: 2, fillOpacity: 0.12 },
+          onEachFeature: (feat, lyr)=>{
+            const props = feat.properties || {};
+            const label = props.PRECINCT || props.LABEL || props.MAP_NAME || layerDef.name;
+            lyr.bindTooltip(`${layerDef.name}: ${label} (click to use as reference)`, { sticky:true });
+            lyr.on('click', (ev)=>{
+              L.DomEvent.stopPropagation(ev);
+              useOfficialLayerAsReference(feat, layerDef.name);
+            });
+          }
+        }).addTo(lmrOfficialLayerGroup);
+      });
+    }catch(err){
+      errors.push(`${layerDef.name}: ${err.message}`);
+    }
+  }
+  if(errors.length && lmrOfficialFeatureCount === 0){
+    statusEl.innerHTML = `<span class="err">Failed to load: ${errors.join(' | ')}</span>`;
+  } else if(errors.length){
+    statusEl.innerHTML = `<span class="ok">${lmrOfficialFeatureCount} feature(s) loaded</span> — <span class="err">${errors.join(' | ')}</span>`;
+  } else if(lmrOfficialFeatureCount === 0){
+    statusEl.innerHTML = '<span>No Town Centre or Exclusion Map features in the current map view — pan/zoom to the area first.</span>';
+  } else {
+    statusEl.innerHTML = `<span class="ok">${lmrOfficialFeatureCount} feature(s) loaded — click a boundary on the map to use it as the reference point</span>`;
+  }
+});
+
+// Approximates the nearest point on an official boundary's outline to a
+// site polygon: turf has no line-to-polygon nearest-point function, so
+// every site vertex is tested against the boundary line (turf.nearestPointOnLine
+// is point-to-line) and the closest pair wins. Real NSW EPI polygons have
+// dense rings, so this is accurate in practice despite being an approximation.
+function nearestPointOnBoundaryToSite(boundaryLine, siteGeom){
+  const coords = siteGeom.type === 'MultiPolygon' ? siteGeom.coordinates.flat(2) : siteGeom.coordinates.flat();
+  let best = null, bestDistKm = Infinity;
+  coords.forEach(coord=>{
+    const nearest = turf.nearestPointOnLine(boundaryLine, turf.point(coord));
+    if(nearest.properties.dist < bestDistKm){
+      bestDistKm = nearest.properties.dist;
+      best = nearest.geometry.coordinates;
+    }
+  });
+  return { point: best, distKm: bestDistKm };
+}
+
+function useOfficialLayerAsReference(feature, layerName){
+  if(!sites.length){
+    alert('Add at least one site first — the reference point is set to the point on this boundary nearest your site(s).');
+    return;
+  }
+  const boundaryLine = turf.polygonToLine(feature);
+  let best = null, bestDistKm = Infinity;
+  sites.forEach(site=>{
+    const r = nearestPointOnBoundaryToSite(boundaryLine, site.geom);
+    if(r.point && r.distKm < bestDistKm){ bestDistKm = r.distKm; best = r.point; }
+  });
+  if(!best) return;
+  refPoint = best;
+  if(refPointMarker) map.removeLayer(refPointMarker);
+  refPointMarker = L.circleMarker([refPoint[1], refPoint[0]], { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+  refPointMarker.bindTooltip(`Reference point — nearest edge of ${layerName}`, { permanent:false });
+  document.getElementById('refPointStatus').innerHTML = `<span class="ok">Set from ${layerName} — nearest edge to your site(s), ${(bestDistKm*1000).toFixed(0)}m away, at ${refPoint[1].toFixed(6)}, ${refPoint[0].toFixed(6)}</span>`;
 }
 
 /* =========================================================
