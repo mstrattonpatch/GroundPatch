@@ -1862,36 +1862,56 @@ function closeChatPanel(){
 document.getElementById('chatToggleBtn').addEventListener('click', openChatPanel);
 document.getElementById('chatPanelClose').addEventListener('click', closeChatPanel);
 
+// Put the layer's own display/colour field (e.g. SYM_CODE for Land Zoning)
+// first so it survives the slice below even on layers that return many
+// attributes — otherwise the one field a user is most likely to ask about
+// can get cut off before it reaches the model. Shared by both the
+// assessment-area-wide classes and the subject-site-clipped ones below.
+function summaryGroupToClassEntry(g, lyr){
+  let entries = g.entries;
+  if(lyr.field){
+    const idx = entries.findIndex(([k])=> k === lyr.field);
+    if(idx > 0) entries = [entries[idx], ...entries.slice(0, idx), ...entries.slice(idx+1)];
+  }
+  const cls = {
+    attributes: entries.slice(0, 8).map(([k,v])=>`${k}=${v}`).join(', '),
+    featureCount: g.count
+  };
+  if(g.areaHa != null) cls.areaHectares = +g.areaHa.toFixed(2);
+  if(g.lengthKm != null) cls.lengthKm = +g.lengthKm.toFixed(2);
+  return cls;
+}
+
 function buildSiteContext(){
   const assessmentLayers = layers.filter(l =>
     l.bufferKm !== CONTEXT_BUFFER_KM && l.lastGeoJSON && l.lastGeoJSON.features.length
   );
   const layerSummaries = assessmentLayers.map(lyr=>{
     const groups = summarizeFeatures(lyr.lastGeoJSON.features);
-    const classes = groups.slice(0, 20).map(g=>{
-      // Put the layer's own display/colour field (e.g. SYM_CODE for Land
-      // Zoning) first so it survives the slice below even on layers that
-      // return many attributes — otherwise the one field a user is most
-      // likely to ask about can get cut off before it reaches the model.
-      let entries = g.entries;
-      if(lyr.field){
-        const idx = entries.findIndex(([k])=> k === lyr.field);
-        if(idx > 0) entries = [entries[idx], ...entries.slice(0, idx), ...entries.slice(idx+1)];
+    const classes = groups.slice(0, 20).map(g => summaryGroupToClassEntry(g, lyr));
+
+    // Same breakdown again, but clipped to the subject site boundary itself
+    // rather than the whole assessment area — mirrors the Excel export's
+    // per-layer "area within project area" sheets, so the chat can answer
+    // "how much PCT is actually within the subject site" instead of only
+    // being able to describe the much larger assessment area.
+    let withinSubjectSite = null;
+    if(boundaryGeom){
+      const clipped = clipFeatureCollection(lyr.lastGeoJSON, boundaryGeom);
+      if(clipped.features.length){
+        withinSubjectSite = summarizeFeatures(clipped.features)
+          .slice(0, 20)
+          .map(g => summaryGroupToClassEntry(g, lyr));
       }
-      const cls = {
-        attributes: entries.slice(0, 8).map(([k,v])=>`${k}=${v}`).join(', '),
-        featureCount: g.count
-      };
-      if(g.areaHa != null) cls.areaHectares = +g.areaHa.toFixed(2);
-      if(g.lengthKm != null) cls.lengthKm = +g.lengthKm.toFixed(2);
-      return cls;
-    });
+    }
+
     return {
       layer: lyr.name,
       category: lyr.cat,
       totalFeatures: lyr.lastGeoJSON.features.length,
       truncated: !!lyr.lastGeoJSON.truncated,
-      classes
+      classes,              // within the assessment area (the buffer)
+      withinSubjectSite     // within the subject site boundary itself; null if nothing there
     };
   });
   return {
