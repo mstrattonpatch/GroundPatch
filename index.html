@@ -275,6 +275,34 @@
     overflow-y:auto;
   }
 
+  /* ---------- Chat ---------- */
+  #chatMessages{
+    max-height:320px;
+    overflow-y:auto;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .chat-msg{
+    font-size:12.5px;
+    line-height:1.5;
+    border-radius:2px;
+    padding:8px 10px;
+    max-width:92%;
+  }
+  .chat-msg b{
+    display:block;
+    font-size:10px;
+    font-weight:700;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+    margin-bottom:3px;
+    color:var(--ink-soft);
+  }
+  .chat-user{ background:var(--slate-soft); align-self:flex-end; }
+  .chat-assistant{ background:#fff; border:1px solid var(--line); align-self:flex-start; }
+  #chatStatus .err{ color:var(--red); }
+
   /* ---------- Map ---------- */
   #mapwrap{ flex:1; position:relative; }
   #map{ width:100%; height:100%; }
@@ -538,6 +566,17 @@
       <button class="primary" id="composeFigure">Compose figure</button>
     </section>
 
+    <section id="chatSection" style="display:none;">
+      <h2>Ask about this site</h2>
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Grounded only in the layers queried above, clipped to the assessment buffer — no outside knowledge, no guessing beyond that data.</p>
+      <div id="chatMessages"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <input type="text" id="chatInput" placeholder="e.g. Which PCTs are mapped on site?" style="flex:1;font-family:inherit;font-size:12px;padding:7px 9px;border:1px solid var(--line);border-radius:2px;background:#fff;">
+        <button class="secondary" id="chatSend" style="width:auto;padding:7px 12px;">Send</button>
+      </div>
+      <div id="chatStatus" style="margin-top:6px;font-size:12px;"></div>
+    </section>
+
   </div>
 </div>
 
@@ -655,6 +694,15 @@ function needsProxy(url){
 function withProxy(url){
   return needsProxy(url) ? LOCAL_PROXY + encodeURIComponent(url) : url;
 }
+
+/* =========================================================
+   Chat — a first-party /chat route on the same Worker (not a
+   third-party host, so it doesn't go through withProxy/PROXY_HOSTS).
+   The Worker holds the Anthropic API key and calls Claude server-side;
+   the client only ever sends the already-clipped, attribute-only site
+   summary — never a raw API key, never full layer geometry.
+========================================================= */
+const CHAT_ENDPOINT = 'https://groundpatch-proxy.maxstratton12.workers.dev/chat';
 
 /* =========================================================
    Default layer registry — real NSW ArcGIS services.
@@ -1669,6 +1717,14 @@ async function runAll(){
 
   renderLayerList();
   renderExportList();
+
+  // Reset the chat on every fresh query — the grounded data it can
+  // see has just changed, so a carried-over conversation would answer
+  // against stale context.
+  chatHistory = [];
+  renderChatMessages();
+  document.getElementById('chatSection').style.display = 'block';
+  document.getElementById('chatStatus').textContent = '';
   }catch(fatalErr){
     console.error('runAll failed:', fatalErr);
     alert('Something went wrong while fetching site data: ' + fatalErr.message + '\n\nCheck the browser console for details.');
@@ -1683,6 +1739,91 @@ document.getElementById('copyReport').addEventListener('click', ()=>{
   const old = btn.textContent;
   btn.textContent = 'Copied';
   setTimeout(()=> btn.textContent = old, 1200);
+});
+
+/* =========================================================
+   Chat — grounded strictly in the layers that were actually queried
+   and clipped to the assessment buffer this run (excludes the
+   context-only layers like Cadastre/Roads, which use the smaller
+   CONTEXT_BUFFER_KM buffer instead). Only an attribute-level summary
+   is sent, not raw geometry — reuses summarizeFeatures() (the same
+   grouping already used for the on-screen result cards), so identical
+   records collapse into one class with a count instead of listing
+   every feature.
+========================================================= */
+let chatHistory = []; // [{role:'user'|'assistant', content:string}, ...]
+
+function buildSiteContext(){
+  const assessmentLayers = layers.filter(l =>
+    l.bufferKm !== CONTEXT_BUFFER_KM && l.lastGeoJSON && l.lastGeoJSON.features.length
+  );
+  const layerSummaries = assessmentLayers.map(lyr=>{
+    const groups = summarizeFeatures(lyr.lastGeoJSON.features);
+    const classes = groups.slice(0, 20).map(g=>({
+      attributes: g.entries.slice(0, 6).map(([k,v])=>`${k}=${v}`).join(', '),
+      featureCount: g.count
+    }));
+    return {
+      layer: lyr.name,
+      category: lyr.cat,
+      totalFeatures: lyr.lastGeoJSON.features.length,
+      truncated: !!lyr.lastGeoJSON.truncated,
+      classes
+    };
+  });
+  return {
+    siteAreaHectares: boundaryGeom ? +polygonAreaHa(boundaryGeom).toFixed(2) : null,
+    assessmentBufferKm: ASSESSMENT_BUFFER_KM,
+    layers: layerSummaries
+  };
+}
+
+function renderChatMessages(){
+  const el = document.getElementById('chatMessages');
+  el.innerHTML = chatHistory.map(m=>`
+    <div class="chat-msg chat-${m.role}">
+      <b>${m.role === 'user' ? 'You' : 'GroundPatch'}</b>
+      <div>${xmlEscape(m.content).replace(/\n/g,'<br>')}</div>
+    </div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendChatMessage(){
+  const input = document.getElementById('chatInput');
+  const btn = document.getElementById('chatSend');
+  const statusEl = document.getElementById('chatStatus');
+  const text = input.value.trim();
+  if(!text) return;
+
+  chatHistory.push({ role:'user', content:text });
+  renderChatMessages();
+  input.value = '';
+  btn.disabled = true;
+  statusEl.textContent = 'Thinking…';
+
+  try{
+    const resp = await fetch(CHAT_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteContext: buildSiteContext(), messages: chatHistory })
+    });
+    const data = await resp.json();
+    if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    chatHistory.push({ role:'assistant', content: data.reply });
+    renderChatMessages();
+    statusEl.textContent = '';
+  }catch(err){
+    chatHistory.pop(); // didn't get a reply — put the draft back rather than leave an orphaned turn
+    input.value = text;
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('chatSend').addEventListener('click', sendChatMessage);
+document.getElementById('chatInput').addEventListener('keydown', e=>{
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChatMessage(); }
 });
 
 /* =========================================================
