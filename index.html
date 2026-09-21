@@ -735,7 +735,7 @@ function bufferGeomFor(lyr){ return lyr.bufferKm === CONTEXT_BUFFER_KM ? context
    where CORS doesn't apply at all.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de'];
+const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
   catch(e){ return false; }
@@ -1257,7 +1257,19 @@ function toEsriRings(geom){
    Overpass is free, publicly queryable, and CORS-enabled for exactly
    this kind of client-side use (the same backend QuickOSM uses).
 ========================================================= */
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+// Multiple public instances, tried in order. overpass-api.de is deliberately
+// excluded — confirmed via a direct browser request (no app/proxy involved)
+// to return a hard Apache-level 406 on every subdomain, so retrying it here
+// just wastes the per-layer timeout below for zero chance of success.
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
+// Each endpoint gets its own timeout — without one, a hung connection to a
+// single bad Overpass mirror blocks every layer queried after it, since
+// runAll() queries layers one at a time. This was silently stalling "Fetch
+// site data" indefinitely on the old single-endpoint, no-timeout version.
+const OVERPASS_TIMEOUT_MS = 30000;
 
 function largestRing(geom){
   const rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p => p[0]);
@@ -1269,16 +1281,34 @@ function ringToOverpassPoly(ring){
   return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
 }
 
+async function postOverpassQuery(query){
+  const attempts = [];
+  for(const endpoint of OVERPASS_ENDPOINTS){
+    const controller = new AbortController();
+    const timer = setTimeout(()=> controller.abort(), OVERPASS_TIMEOUT_MS);
+    try{
+      const resp = await fetch(withProxy(endpoint), {
+        method:'POST',
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+        signal: controller.signal
+      });
+      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    }catch(err){
+      const msg = err.name === 'AbortError' ? `timed out after ${OVERPASS_TIMEOUT_MS/1000}s` : err.message;
+      attempts.push(`${endpoint}: ${msg}`);
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(`All Overpass endpoints failed — ${attempts.join(' | ')}`);
+}
+
 async function queryOsmRoads(lyr){
   const poly = ringToOverpassPoly(largestRing(bufferGeomFor(lyr)));
   const query = `[out:json][timeout:25];${lyr.osmFilter}(poly:"${poly}");out geom;`;
-  const resp = await fetch(withProxy(OVERPASS_URL), {
-    method:'POST',
-    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query)
-  });
-  if(!resp.ok) throw new Error(`HTTP ${resp.status} from Overpass API`);
-  const json = await resp.json();
+  const json = await postOverpassQuery(query);
   const features = (json.elements || [])
     .filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1)
     .map(el => ({
