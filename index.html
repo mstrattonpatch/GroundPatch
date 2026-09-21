@@ -1575,6 +1575,8 @@ function formatAttrValue(key, v){
 
 // Group features by their (filtered, formatted) attribute set so identical
 // records collapse into one row with a "× N" count instead of repeating.
+// Also accumulates each group's total area (polygons) or length (lines) so
+// callers like buildSiteContext() can report hectares/km, not just counts.
 function summarizeFeatures(features){
   const groups = new Map();
   features.forEach(f=>{
@@ -1584,10 +1586,26 @@ function summarizeFeatures(features){
       .map(([k,v])=>[k, formatAttrValue(k, v)])
       .filter(([,v])=> v !== null);
     const key = entries.map(([k,v])=>`${k}=${v}`).join('|');
-    if(!groups.has(key)) groups.set(key, { entries, count:0 });
-    groups.get(key).count++;
+    if(!groups.has(key)) groups.set(key, { entries, count:0, areaHa:0, lengthKm:0, hasArea:false, hasLength:false });
+    const g = groups.get(key);
+    g.count++;
+    const geomType = f.geometry && f.geometry.type;
+    try{
+      if(geomType === 'Polygon' || geomType === 'MultiPolygon'){
+        g.areaHa += turf.area(f) / 10000;
+        g.hasArea = true;
+      } else if(geomType === 'LineString' || geomType === 'MultiLineString'){
+        g.lengthKm += turf.length(f, { units:'kilometers' });
+        g.hasLength = true;
+      }
+    }catch(e){ /* malformed geometry — keep the count, skip the measure */ }
   });
-  return [...groups.values()];
+  return [...groups.values()].map(g=>({
+    entries: g.entries,
+    count: g.count,
+    areaHa: g.hasArea ? g.areaHa : null,
+    lengthKm: g.hasLength ? g.lengthKm : null
+  }));
 }
 
 /* =========================================================
@@ -1850,10 +1868,24 @@ function buildSiteContext(){
   );
   const layerSummaries = assessmentLayers.map(lyr=>{
     const groups = summarizeFeatures(lyr.lastGeoJSON.features);
-    const classes = groups.slice(0, 20).map(g=>({
-      attributes: g.entries.slice(0, 6).map(([k,v])=>`${k}=${v}`).join(', '),
-      featureCount: g.count
-    }));
+    const classes = groups.slice(0, 20).map(g=>{
+      // Put the layer's own display/colour field (e.g. SYM_CODE for Land
+      // Zoning) first so it survives the slice below even on layers that
+      // return many attributes — otherwise the one field a user is most
+      // likely to ask about can get cut off before it reaches the model.
+      let entries = g.entries;
+      if(lyr.field){
+        const idx = entries.findIndex(([k])=> k === lyr.field);
+        if(idx > 0) entries = [entries[idx], ...entries.slice(0, idx), ...entries.slice(idx+1)];
+      }
+      const cls = {
+        attributes: entries.slice(0, 8).map(([k,v])=>`${k}=${v}`).join(', '),
+        featureCount: g.count
+      };
+      if(g.areaHa != null) cls.areaHectares = +g.areaHa.toFixed(2);
+      if(g.lengthKm != null) cls.lengthKm = +g.lengthKm.toFixed(2);
+      return cls;
+    });
     return {
       layer: lyr.name,
       category: lyr.cat,
@@ -1863,8 +1895,14 @@ function buildSiteContext(){
     };
   });
   return {
-    siteAreaHectares: boundaryGeom ? +polygonAreaHa(boundaryGeom).toFixed(2) : null,
-    assessmentBufferKm: ASSESSMENT_BUFFER_KM,
+    // "Subject site" = the boundary the user selected/uploaded (the actual
+    // project footprint). "Assessment area" = the buffer drawn around it —
+    // every layer below was queried and clipped to THAT larger extent, not
+    // to the subject site boundary itself. Keeping these two labeled
+    // separately (rather than one ambiguous "site") is what lets the model
+    // answer "within the assessment area" instead of wrongly saying "on site".
+    subjectSiteAreaHectares: boundaryGeom ? +polygonAreaHa(boundaryGeom).toFixed(2) : null,
+    assessmentAreaBufferKm: ASSESSMENT_BUFFER_KM,
     layers: layerSummaries
   };
 }
