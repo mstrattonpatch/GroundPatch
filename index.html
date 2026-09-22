@@ -1461,7 +1461,13 @@ async function queryLayer(lyr){
 // the URL hits length limits on some government servers (seen as a 502 from
 // the proxy — the server rejected the request before the proxy could relay
 // anything useful back). Sending it as a form-encoded body avoids that.
-const ARCGIS_QUERY_TIMEOUT_MS = 30000;
+// 90s, not 30 — large geometry-heavy layers (SVTM's vegetation polygons
+// across a full 5km buffer, in particular) can legitimately take close to a
+// minute per request under load. 30s was long enough to stop a genuinely
+// dead server from hanging the whole run forever, but too short for the
+// biggest layers' real, successful responses — this still fails a truly
+// unresponsive server, just with more headroom for large-but-working ones.
+const ARCGIS_QUERY_TIMEOUT_MS = 90000;
 
 async function postQuery(endpointUrl, params){
   const controller = new AbortController();
