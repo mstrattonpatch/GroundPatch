@@ -2085,6 +2085,9 @@ function renderExportList(){
   document.getElementById('bioConstraintsResult').innerHTML = '';
   if(bioConstraintsLayer){ map.removeLayer(bioConstraintsLayer); bioConstraintsLayer = null; }
   bioConstraintsResultFC = null;
+  bcTierSourceGroups = { High: [], Medium: [], Low: [] };
+  bcUploadedFeatures = { High: [], Medium: [], Low: [] };
+  bcUploadedFileNames = { High: null, Medium: null, Low: null };
 
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
@@ -2175,6 +2178,12 @@ function geojsonToCSV(gj){
 const BIO_CONSTRAINT_COLORS = { High:'#9C3B3B', Medium:'#B9852E', Low:'#52684A' };
 let bcCurrentOptions = [];
 let bcUploadedFeatures = { High: [], Medium: [], Low: [] };
+let bcUploadedFileNames = { High: null, Medium: null, Low: null };
+// Populated by generateBioConstraints(): per tier, the source groups (layer
+// class, upload, or the "remaining low" complement) that fed into it, each
+// with its own raw (non-deduplicated) features — used by the Excel export
+// to list each source's own area and reproduce its raw attribute table.
+let bcTierSourceGroups = { High: [], Medium: [], Low: [] };
 let bioConstraintsResultFC = null;
 let bioConstraintsLayer = null;
 
@@ -2278,6 +2287,7 @@ function handleBcUpload(file, tier, statusEl){
   const ext = file.name.split('.').pop().toLowerCase();
   const done = feats => {
     bcUploadedFeatures[tier] = feats;
+    bcUploadedFileNames[tier] = file.name;
     statusEl.textContent = `${file.name} (${feats.length} feature${feats.length===1?'':'s'})`;
   };
   const failEl = msg => { statusEl.innerHTML = `<span class="err">${msg}</span>`; };
@@ -2348,12 +2358,15 @@ function generateBioConstraints(){
 
   try{
     const tierFeatures = { High: [], Medium: [], Low: [] };
+    bcTierSourceGroups = { High: [], Medium: [], Low: [] };
 
     bcCurrentOptions.forEach((opt, li) => {
       opt.groups.forEach((g, ci) => {
         const checked = document.querySelector(`input[name="bc-${li}-${ci}"]:checked`);
         const tier = checked ? checked.value : 'Exclude';
-        if(tier !== 'Exclude') tierFeatures[tier].push(...g.features);
+        if(tier === 'Exclude') return;
+        tierFeatures[tier].push(...g.features);
+        bcTierSourceGroups[tier].push({ label: `${opt.layerName} — ${g.label}`, features: g.features });
       });
     });
 
@@ -2363,6 +2376,7 @@ function generateBioConstraints(){
       try{ clippedUpload = clipFeatureCollection({ type:'FeatureCollection', features: bcUploadedFeatures[tier] }, boundaryGeom).features; }
       catch(e){ clippedUpload = bcUploadedFeatures[tier]; }
       tierFeatures[tier].push(...clippedUpload);
+      bcTierSourceGroups[tier].push({ label: `Uploaded: ${bcUploadedFileNames[tier] || 'data'}`, features: clippedUpload });
     });
 
     const remainingLow = document.getElementById('bcRemainingLow').checked;
@@ -2385,6 +2399,7 @@ function generateBioConstraints(){
       if(highDissolved) remainder = safeDifference(remainder, highDissolved);
       if(mediumFinal) remainder = safeDifference(remainder, mediumFinal);
       lowRaw = remainder;
+      if(remainder) bcTierSourceGroups.Low.push({ label: 'Remaining area (not covered by High or Medium)', features: [remainder] });
     }else{
       lowRaw = dissolveFeatures(tierFeatures.Low);
     }
@@ -2439,7 +2454,8 @@ function renderBioConstraintsResult(fc){
     <div style="display:flex;gap:6px;margin-top:10px;">
       <button class="secondary" id="bcExportGeojson" style="flex:1;">GeoJSON</button>
       <button class="secondary" id="bcExportShp" style="flex:1;">Shapefile</button>
-    </div>`;
+    </div>
+    <button class="secondary" id="bcExportXlsx" style="margin-top:6px;width:100%;">Export area report (.xlsx)</button>`;
 
   document.getElementById('bcExportGeojson').addEventListener('click', ()=>{
     downloadBlob('biodiversity-constraints.geojson', JSON.stringify(bioConstraintsResultFC), 'application/geo+json');
@@ -2447,6 +2463,75 @@ function renderBioConstraintsResult(fc){
   document.getElementById('bcExportShp').addEventListener('click', (e)=>{
     exportShapefile(bioConstraintsResultFC, 'biodiversity-constraints', { field:'tier', colorMap: BIO_CONSTRAINT_COLORS }, e.target);
   });
+  document.getElementById('bcExportXlsx').addEventListener('click', exportBioConstraintsXlsx);
+}
+
+// Sheet 1: each tier's DISSOLVED (de-duplicated) total, plus every source
+// layer/class/upload that fed into it showing its own RAW area — so if two
+// overlapping sources contribute 1ha and 1ha with a 0.5ha overlap, the tier
+// total reads 1.5ha (matching the dissolved map layer) while each source row
+// still shows its own 1ha. Sheets 2-4: one per tier, the underlying raw
+// feature attribute tables (as queried, before dissolving), grouped by
+// source, each with its own hectare-per-feature column and a sum row.
+function exportBioConstraintsXlsx(){
+  if(!bioConstraintsResultFC){ alert('Generate biodiversity constraints first.'); return; }
+  if(typeof XLSX === 'undefined'){ alert('The Excel report library did not load — check network access to cdnjs.'); return; }
+
+  const wb = XLSX.utils.book_new();
+  const byTier = {};
+  bioConstraintsResultFC.features.forEach(f=> byTier[f.properties.tier] = f.properties.areaHectares);
+  const siteHa = boundaryGeom ? polygonAreaHa(boundaryGeom) : null;
+
+  const summaryRows = [
+    ['BIODIVERSITY CONSTRAINTS — AREA SUMMARY'],
+    ['Generated', new Date().toLocaleString()],
+    ['Subject site area', (siteHa != null ? siteHa.toFixed(4) : '') + ' ha'],
+    []
+  ];
+  ['High','Medium','Low'].forEach(tier=>{
+    summaryRows.push([tier + ' total area (de-duplicated)', '', +(byTier[tier] || 0).toFixed(4) + ' ha']);
+    (bcTierSourceGroups[tier] || []).forEach(g=>{
+      let areaHa = 0;
+      g.features.forEach(f=>{ try{ areaHa += turf.area(f) / 10000; }catch(e){} });
+      summaryRows.push(['    ' + g.label, +areaHa.toFixed(4) + ' ha']);
+    });
+    summaryRows.push([]);
+  });
+  const totalHa = ['High','Medium','Low'].reduce((s,t)=> s + (byTier[t] || 0), 0);
+  summaryRows.push(['High + Medium + Low', '', +totalHa.toFixed(4) + ' ha']);
+  summaryRows.push([]);
+  summaryRows.push(['Note: each tier\'s total above is the dissolved (de-duplicated) area shown on the map — where two source rows underneath it overlap, that overlap is only counted once in the total. Each source row still shows its own raw area, so the rows under a tier can sum to more than that tier\'s total.']);
+
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
+  ws1['!cols'] = [{wch:48},{wch:8},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Layer Areas');
+
+  ['High','Medium','Low'].forEach(tier=>{
+    const groups = bcTierSourceGroups[tier] || [];
+    const rows = [[tier.toUpperCase() + ' VALUE — RAW LAYER DATA'], []];
+    if(!groups.length){
+      rows.push(['No layers/classes assigned to this tier.']);
+    }
+    groups.forEach(g=>{
+      rows.push([g.label]);
+      const propKeys = [...new Set(g.features.flatMap(f=> Object.keys(f.properties || {})))];
+      rows.push([...propKeys, 'Area (ha)']);
+      let sumHa = 0;
+      g.features.forEach(f=>{
+        let areaHa = 0;
+        try{ areaHa = turf.area(f) / 10000; }catch(e){}
+        sumHa += areaHa;
+        rows.push([...propKeys.map(k => (f.properties || {})[k] ?? ''), +areaHa.toFixed(4)]);
+      });
+      rows.push(['Sum', ...propKeys.slice(1).map(()=>''), +sumHa.toFixed(4)]);
+      rows.push([]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:24},{wch:20},{wch:20},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws, tier);
+  });
+
+  XLSX.writeFile(wb, 'biodiversity-constraints-' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
 // One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
