@@ -1461,14 +1461,32 @@ async function queryLayer(lyr){
 // the URL hits length limits on some government servers (seen as a 502 from
 // the proxy — the server rejected the request before the proxy could relay
 // anything useful back). Sending it as a form-encoded body avoids that.
+const ARCGIS_QUERY_TIMEOUT_MS = 30000;
+
 async function postQuery(endpointUrl, params){
-  const resp = await fetch(withProxy(endpointUrl), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString()
-  });
-  if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp;
+  const controller = new AbortController();
+  const timer = setTimeout(()=> controller.abort(), ARCGIS_QUERY_TIMEOUT_MS);
+  try{
+    const resp = await fetch(withProxy(endpointUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      signal: controller.signal
+    });
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp;
+  }catch(err){
+    // A stalled/unresponsive government server used to hang this fetch
+    // forever, blocking every subsequent layer since they're queried one
+    // at a time — same failure mode the Overpass endpoints had before
+    // postOverpassQuery() got a timeout. This is that same fix applied to
+    // the ArcGIS query path (queryLayerByIds and queryLayerSimple both
+    // route every request through this one function).
+    if(err.name === 'AbortError') throw new Error(`timed out after ${ARCGIS_QUERY_TIMEOUT_MS/1000}s`);
+    throw err;
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 async function queryLayerByIds(lyr){
