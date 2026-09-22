@@ -499,6 +499,9 @@
   .bc-upload-row .bc-upload-name{ flex:none; width:52px; color:var(--ink-soft); }
   .bc-upload-row input[type=file]{ font-size:11px; max-width:150px; flex:none; }
   .bc-upload-row .bc-upload-status{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; color:var(--ink-soft); }
+  .bc-remaining-low{ display:flex; align-items:flex-start; gap:8px; font-size:11px; line-height:1.5; color:var(--ink-soft); cursor:pointer; padding:6px 2px 0; }
+  .bc-remaining-low input{ margin-top:2px; flex:none; }
+  .bc-remaining-low strong{ color:var(--ink); }
   #bcGenerateStatus{ font-size:12px; margin-bottom:8px; min-height:16px; flex:none; }
   #bcGenerateStatus .err{ color:var(--red); }
   #bcGenerateStatus .ok{ color:var(--moss); }
@@ -576,6 +579,10 @@
         <input type="file" id="bcUploadLow" accept=".geojson,.json,.zip">
         <span class="bc-upload-status" id="bcUploadLowStatus"></span>
       </div>
+      <label class="bc-remaining-low">
+        <input type="checkbox" id="bcRemainingLow">
+        <span><strong>Remaining low</strong> — mark every part of the subject site not already covered by High or Medium as Low value, instead of only the classes/uploads picked above.</span>
+      </label>
     </div>
     <div id="bcGenerateStatus"></div>
     <div class="btn-row">
@@ -2358,16 +2365,30 @@ function generateBioConstraints(){
       tierFeatures[tier].push(...clippedUpload);
     });
 
-    if(!tierFeatures.High.length && !tierFeatures.Medium.length && !tierFeatures.Low.length){
-      statusEl.innerHTML = '<span class="err">Nothing selected — assign at least one class or upload data to a tier first.</span>';
+    const remainingLow = document.getElementById('bcRemainingLow').checked;
+    if(!tierFeatures.High.length && !tierFeatures.Medium.length && !tierFeatures.Low.length && !remainingLow){
+      statusEl.innerHTML = '<span class="err">Nothing selected — assign at least one class, upload data, or tick "Remaining low" first.</span>';
       return;
     }
 
     const highDissolved = dissolveFeatures(tierFeatures.High);
     const mediumRaw = dissolveFeatures(tierFeatures.Medium);
-    const lowRaw = dissolveFeatures(tierFeatures.Low);
-
     const mediumFinal = highDissolved ? safeDifference(mediumRaw, highDissolved) : mediumRaw;
+
+    // "Remaining low" replaces the explicit Low picks entirely with
+    // everything in the subject site not already claimed by High/Medium —
+    // any explicitly-picked Low area is a subset of that anyway, since it
+    // can't also be High or Medium.
+    let lowRaw;
+    if(remainingLow){
+      let remainder = turf.feature(boundaryGeom);
+      if(highDissolved) remainder = safeDifference(remainder, highDissolved);
+      if(mediumFinal) remainder = safeDifference(remainder, mediumFinal);
+      lowRaw = remainder;
+    }else{
+      lowRaw = dissolveFeatures(tierFeatures.Low);
+    }
+
     let lowFinal = highDissolved ? safeDifference(lowRaw, highDissolved) : lowRaw;
     if(mediumRaw) lowFinal = safeDifference(lowFinal, mediumRaw);
 
