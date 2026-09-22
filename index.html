@@ -470,6 +470,47 @@
   #qgisScriptCard .btn-row button{ flex:1; }
   #qgisScriptCard .btn-row button:disabled{ background:#c9c4b4; color:#8a8577; cursor:not-allowed; border-color:#c9c4b4; }
   #qgisScriptCard .lock-hint{ font-size:11px; color:var(--ink-soft); text-align:center; margin:6px 0 0; }
+
+  /* ---------- Biodiversity constraints modal ---------- */
+  #bioConstraintsModal{
+    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3200;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #bioConstraintsModal.show{ display:flex; }
+  #bioConstraintsCard{
+    background:var(--panel); border:1px solid var(--line); max-width:640px;
+    width:100%; max-height:90vh; padding:24px 24px 20px; display:flex; flex-direction:column;
+  }
+  #bioConstraintsCard h2{ font-size:15px; margin:0 0 6px; font-weight:700; }
+  #bioConstraintsCard > p{ font-size:12.5px; line-height:1.6; color:var(--ink-soft); margin:0 0 14px; }
+  #bcSourceList{ overflow-y:auto; flex:1; min-height:0; border:1px solid var(--line); margin-bottom:14px; }
+  .bc-layer-group{ border-bottom:1px solid var(--line); }
+  .bc-layer-group:last-child{ border-bottom:none; }
+  .bc-layer-name{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); padding:8px 10px 4px; }
+  .bc-class-row{ display:flex; align-items:center; gap:10px; padding:5px 10px 5px 16px; font-size:12px; }
+  .bc-class-row .bc-class-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bc-class-row .bc-area{ font-size:11px; color:var(--ink-soft); flex:none; }
+  .bc-tier-radios{ display:flex; gap:6px; flex:none; }
+  .bc-tier-radios label{ display:flex; align-items:center; gap:3px; font-size:10.5px; color:var(--ink-soft); cursor:pointer; }
+  .bc-empty{ padding:16px 10px; font-size:12px; color:var(--ink-soft); text-align:center; }
+  #bcUploadRows{ display:flex; flex-direction:column; gap:8px; margin-bottom:14px; flex:none; }
+  .bc-upload-row{ display:flex; align-items:center; gap:8px; font-size:12px; }
+  .bc-upload-row .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:2px; }
+  .bc-upload-row .bc-upload-name{ flex:none; width:52px; color:var(--ink-soft); }
+  .bc-upload-row input[type=file]{ font-size:11px; max-width:150px; flex:none; }
+  .bc-upload-row .bc-upload-status{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; color:var(--ink-soft); }
+  #bcGenerateStatus{ font-size:12px; margin-bottom:8px; min-height:16px; flex:none; }
+  #bcGenerateStatus .err{ color:var(--red); }
+  #bcGenerateStatus .ok{ color:var(--moss); }
+  #bioConstraintsCard .btn-row{ display:flex; gap:8px; flex:none; }
+  #bioConstraintsCard .btn-row button{ flex:1; }
+
+  /* ---------- Biodiversity constraints result (sidebar) ---------- */
+  .bc-tier-summary{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dotted #DAD5C6; font-size:12px; }
+  .bc-tier-summary:last-of-type{ border-bottom:none; }
+  .bc-tier-summary .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:2px; }
+  .bc-tier-summary .bc-tier-name{ flex:1; }
+  .bc-tier-summary .bc-tier-ha{ color:var(--ink-soft); }
 </style>
 </head>
 <body>
@@ -508,6 +549,39 @@
       <button class="primary" id="copyQgisScript">Copy script</button>
     </div>
     <p class="lock-hint" id="qgisLockHint">Copy the script first — then Close unlocks.</p>
+  </div>
+</div>
+
+<div id="bioConstraintsModal">
+  <div id="bioConstraintsCard">
+    <h2>Create biodiversity constraints</h2>
+    <p>Assign the layer classes already downloaded — clipped to the subject site boundary only — to a High, Medium or Low constraint tier, or add your own extra polygons below. Where tiers overlap, High always wins over Medium, and Medium always wins over Low.</p>
+    <div id="bcSourceList"></div>
+    <div id="bcUploadRows">
+      <div class="bc-upload-row">
+        <span class="bc-tier-swatch" style="background:var(--red);"></span>
+        <span class="bc-upload-name">High</span>
+        <input type="file" id="bcUploadHigh" accept=".geojson,.json,.zip">
+        <span class="bc-upload-status" id="bcUploadHighStatus"></span>
+      </div>
+      <div class="bc-upload-row">
+        <span class="bc-tier-swatch" style="background:var(--amber);"></span>
+        <span class="bc-upload-name">Medium</span>
+        <input type="file" id="bcUploadMedium" accept=".geojson,.json,.zip">
+        <span class="bc-upload-status" id="bcUploadMediumStatus"></span>
+      </div>
+      <div class="bc-upload-row">
+        <span class="bc-tier-swatch" style="background:var(--moss);"></span>
+        <span class="bc-upload-name">Low</span>
+        <input type="file" id="bcUploadLow" accept=".geojson,.json,.zip">
+        <span class="bc-upload-status" id="bcUploadLowStatus"></span>
+      </div>
+    </div>
+    <div id="bcGenerateStatus"></div>
+    <div class="btn-row">
+      <button class="secondary" id="closeBioConstraints">Cancel</button>
+      <button class="primary" id="generateBioConstraints">Generate</button>
+    </div>
   </div>
 </div>
 
@@ -591,6 +665,12 @@
       <div id="exportList" style="margin-top:12px;"></div>
       <button class="secondary" id="exportReportXlsx" style="margin-top:4px;">Export report (.xlsx)</button>
       <button class="textbtn" id="viewQgisScript" style="margin-top:8px;">View QGIS styling script</button>
+    </section>
+
+    <section id="bioConstraintsSection" style="display:none;">
+      <h2>Biodiversity constraints</h2>
+      <button class="secondary" id="openBioConstraints">Create biodiversity constraints…</button>
+      <div id="bioConstraintsResult" style="margin-top:10px;"></div>
     </section>
 
     <section id="figureSection" style="display:none;">
@@ -1993,6 +2073,12 @@ function renderExportList(){
   el.innerHTML = '';
   document.getElementById('exportSection').style.display = 'block';
 
+  // New site data means any previously generated constraint layer is stale.
+  document.getElementById('bioConstraintsSection').style.display = 'block';
+  document.getElementById('bioConstraintsResult').innerHTML = '';
+  if(bioConstraintsLayer){ map.removeLayer(bioConstraintsLayer); bioConstraintsLayer = null; }
+  bioConstraintsResultFC = null;
+
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
   boundaryRow.innerHTML = `<span class="name">Site boundary</span>
@@ -2069,6 +2155,277 @@ function geojsonToCSV(gj){
   const lines = [keys.join(',')];
   rows.forEach(r => lines.push(keys.map(k => esc(r[k])).join(',')));
   return lines.join('\n');
+}
+
+/* =========================================================
+   Biodiversity constraints — merge the layers/classes already
+   downloaded (each re-clipped to the subject site boundary, same as
+   withinSubjectSite in the chat context) into a single High/Medium/Low
+   polygon layer, matching how ecologists build a constraints figure by
+   hand. Where tiers overlap, High always wins over Medium, which
+   always wins over Low.
+========================================================= */
+const BIO_CONSTRAINT_COLORS = { High:'#9C3B3B', Medium:'#B9852E', Low:'#52684A' };
+let bcCurrentOptions = [];
+let bcUploadedFeatures = { High: [], Medium: [], Low: [] };
+let bioConstraintsResultFC = null;
+let bioConstraintsLayer = null;
+
+// Group a layer's subject-site-clipped features by its display field (the
+// same field used to colour it on the map) so each distinct class — e.g.
+// GDE_Probability=High vs Low — can be assigned to a different tier.
+function groupClippedFeaturesForConstraints(features, lyr){
+  const groups = new Map();
+  features.forEach(f=>{
+    const props = f.properties || {};
+    const field = pickDisplayField(lyr, props);
+    const label = (field && props[field] !== undefined && props[field] !== null && props[field] !== '')
+      ? String(props[field]) : '(whole layer)';
+    if(!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(f);
+  });
+  return [...groups.entries()].map(([label, feats])=>{
+    let areaHa = 0;
+    feats.forEach(f=>{ try{ areaHa += turf.area(f) / 10000; }catch(e){} });
+    return { label, features: feats, areaHa };
+  }).sort((a,b)=> b.areaHa - a.areaHa);
+}
+
+// Only polygon layers that were actually queried against the assessment
+// area AND intersect the subject site boundary — line layers (Roads,
+// Watercourses, Strahler) don't have an "area" to assign to a tier, and
+// context-only layers (Cadastre) aren't ecological constraints.
+function getConstraintLayerOptions(){
+  if(!boundaryGeom) return [];
+  const out = [];
+  layers.forEach(lyr=>{
+    if(lyr.bufferKm === CONTEXT_BUFFER_KM) return;
+    if(!lyr.lastGeoJSON || !lyr.lastGeoJSON.features.length) return;
+    const firstGeomType = lyr.lastGeoJSON.features[0].geometry && lyr.lastGeoJSON.features[0].geometry.type;
+    if(firstGeomType !== 'Polygon' && firstGeomType !== 'MultiPolygon') return;
+    let clipped;
+    try{ clipped = clipFeatureCollection(lyr.lastGeoJSON, boundaryGeom); }catch(e){ return; }
+    if(!clipped.features.length) return;
+    out.push({ layerName: lyr.name, groups: groupClippedFeaturesForConstraints(clipped.features, lyr) });
+  });
+  return out;
+}
+
+function renderBcSourceList(){
+  const el = document.getElementById('bcSourceList');
+  bcCurrentOptions = getConstraintLayerOptions();
+  if(!bcCurrentOptions.length){
+    el.innerHTML = '<div class="bc-empty">None of the queried layers intersect the subject site boundary — nothing to build constraints from yet. You can still add data via the upload rows below.</div>';
+    return;
+  }
+  el.innerHTML = bcCurrentOptions.map((opt, li) => `
+    <div class="bc-layer-group">
+      <div class="bc-layer-name">${xmlEscape(opt.layerName)}</div>
+      ${opt.groups.map((g, ci) => `
+        <div class="bc-class-row">
+          <span class="bc-class-label" title="${xmlEscape(g.label)}">${xmlEscape(g.label)}</span>
+          <span class="bc-area">${g.areaHa.toFixed(2)} ha</span>
+          <span class="bc-tier-radios">
+            <label><input type="radio" name="bc-${li}-${ci}" value="Exclude" checked> —</label>
+            <label><input type="radio" name="bc-${li}-${ci}" value="High"> H</label>
+            <label><input type="radio" name="bc-${li}-${ci}" value="Medium"> M</label>
+            <label><input type="radio" name="bc-${li}-${ci}" value="Low"> L</label>
+          </span>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+function openBioConstraintsModal(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  renderBcSourceList();
+  document.getElementById('bcGenerateStatus').innerHTML = '';
+  document.getElementById('bioConstraintsModal').classList.add('show');
+}
+function closeBioConstraintsModal(){
+  document.getElementById('bioConstraintsModal').classList.remove('show');
+}
+document.getElementById('openBioConstraints').addEventListener('click', openBioConstraintsModal);
+document.getElementById('closeBioConstraints').addEventListener('click', closeBioConstraintsModal);
+
+// Pull every Polygon/MultiPolygon feature out of an uploaded file, unlike
+// extractGeometry() (used for the boundary upload) which only keeps the
+// first — a constraint tier upload may legitimately contain many patches.
+function extractAllPolygonFeatures(gj){
+  if(!gj) throw new Error('empty file');
+  if(gj.type === 'FeatureCollection'){
+    const feats = gj.features.filter(f => f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon'));
+    if(!feats.length) throw new Error('no polygon features found');
+    return feats;
+  }
+  if(gj.type === 'Feature'){
+    if(!gj.geometry || (gj.geometry.type!=='Polygon' && gj.geometry.type!=='MultiPolygon')) throw new Error('no polygon geometry found');
+    return [gj];
+  }
+  if(gj.type === 'Polygon' || gj.type === 'MultiPolygon'){
+    return [{ type:'Feature', properties:{}, geometry: gj }];
+  }
+  throw new Error('no polygon geometry found');
+}
+
+function handleBcUpload(file, tier, statusEl){
+  const ext = file.name.split('.').pop().toLowerCase();
+  const done = feats => {
+    bcUploadedFeatures[tier] = feats;
+    statusEl.textContent = `${file.name} (${feats.length} feature${feats.length===1?'':'s'})`;
+  };
+  const failEl = msg => { statusEl.innerHTML = `<span class="err">${msg}</span>`; };
+
+  if(ext === 'geojson' || ext === 'json'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{ done(extractAllPolygonFeatures(JSON.parse(e.target.result))); }
+      catch(err){ failEl('Could not parse: ' + err.message); }
+    };
+    reader.readAsText(file);
+  }else if(ext === 'zip'){
+    if(typeof shp === 'undefined'){ failEl('Shapefile support did not load — use GeoJSON instead.'); return; }
+    const reader = new FileReader();
+    reader.onload = e => {
+      shp(e.target.result).then(gj=>{
+        try{ done(extractAllPolygonFeatures(gj)); }
+        catch(err){ failEl('Could not parse: ' + err.message); }
+      }).catch(err=> failEl('Could not parse shapefile: ' + err.message));
+    };
+    reader.readAsArrayBuffer(file);
+  }else{
+    failEl('Unsupported file type: .' + ext);
+  }
+}
+document.getElementById('bcUploadHigh').addEventListener('change', e=>{
+  if(e.target.files.length) handleBcUpload(e.target.files[0], 'High', document.getElementById('bcUploadHighStatus'));
+});
+document.getElementById('bcUploadMedium').addEventListener('change', e=>{
+  if(e.target.files.length) handleBcUpload(e.target.files[0], 'Medium', document.getElementById('bcUploadMediumStatus'));
+});
+document.getElementById('bcUploadLow').addEventListener('change', e=>{
+  if(e.target.files.length) handleBcUpload(e.target.files[0], 'Low', document.getElementById('bcUploadLowStatus'));
+});
+
+// Union every feature in a tier into one (Multi)Polygon. Skips (rather than
+// fails on) any feature turf.union can't merge — e.g. a sliver left over
+// from clipping — so one bad geometry doesn't sink the whole tier.
+function dissolveFeatures(features){
+  let acc = null;
+  features.forEach(f=>{
+    if(!f.geometry || (f.geometry.type!=='Polygon' && f.geometry.type!=='MultiPolygon')) return;
+    if(!acc){ acc = turf.feature(f.geometry); return; }
+    try{
+      const u = turf.union(acc, turf.feature(f.geometry));
+      if(u) acc = u;
+    }catch(e){ /* skip — keep the accumulated union rather than fail the tier */ }
+  });
+  return acc;
+}
+
+// a minus b. Returns null if a is null or fully covered by b; returns a
+// unchanged if the subtraction itself fails on bad geometry, rather than
+// losing the tier entirely.
+function safeDifference(a, b){
+  if(!a) return null;
+  if(!b) return a;
+  try{ return turf.difference(a, b) || null; }
+  catch(e){ return a; }
+}
+
+function generateBioConstraints(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const statusEl = document.getElementById('bcGenerateStatus');
+  const btn = document.getElementById('generateBioConstraints');
+  btn.disabled = true;
+  statusEl.textContent = 'Generating…';
+
+  try{
+    const tierFeatures = { High: [], Medium: [], Low: [] };
+
+    bcCurrentOptions.forEach((opt, li) => {
+      opt.groups.forEach((g, ci) => {
+        const checked = document.querySelector(`input[name="bc-${li}-${ci}"]:checked`);
+        const tier = checked ? checked.value : 'Exclude';
+        if(tier !== 'Exclude') tierFeatures[tier].push(...g.features);
+      });
+    });
+
+    ['High','Medium','Low'].forEach(tier=>{
+      if(!bcUploadedFeatures[tier].length) return;
+      let clippedUpload;
+      try{ clippedUpload = clipFeatureCollection({ type:'FeatureCollection', features: bcUploadedFeatures[tier] }, boundaryGeom).features; }
+      catch(e){ clippedUpload = bcUploadedFeatures[tier]; }
+      tierFeatures[tier].push(...clippedUpload);
+    });
+
+    if(!tierFeatures.High.length && !tierFeatures.Medium.length && !tierFeatures.Low.length){
+      statusEl.innerHTML = '<span class="err">Nothing selected — assign at least one class or upload data to a tier first.</span>';
+      return;
+    }
+
+    const highDissolved = dissolveFeatures(tierFeatures.High);
+    const mediumRaw = dissolveFeatures(tierFeatures.Medium);
+    const lowRaw = dissolveFeatures(tierFeatures.Low);
+
+    const mediumFinal = highDissolved ? safeDifference(mediumRaw, highDissolved) : mediumRaw;
+    let lowFinal = highDissolved ? safeDifference(lowRaw, highDissolved) : lowRaw;
+    if(mediumRaw) lowFinal = safeDifference(lowFinal, mediumRaw);
+
+    const outFeatures = [];
+    [['High', highDissolved], ['Medium', mediumFinal], ['Low', lowFinal]].forEach(([tier, geomFeature])=>{
+      if(!geomFeature) return;
+      let areaHa = 0;
+      try{ areaHa = turf.area(geomFeature) / 10000; }catch(e){}
+      if(areaHa <= 0) return;
+      outFeatures.push({ type:'Feature', properties:{ tier, areaHectares:+areaHa.toFixed(4) }, geometry: geomFeature.geometry });
+    });
+
+    if(!outFeatures.length){
+      statusEl.innerHTML = '<span class="err">The selected data didn\'t produce any mapped area within the subject site.</span>';
+      return;
+    }
+
+    bioConstraintsResultFC = { type:'FeatureCollection', features: outFeatures };
+    renderBioConstraintsResult(bioConstraintsResultFC);
+    statusEl.innerHTML = '<span class="ok">Done — see "Biodiversity constraints" below.</span>';
+    closeBioConstraintsModal();
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('generateBioConstraints').addEventListener('click', generateBioConstraints);
+
+function renderBioConstraintsResult(fc){
+  if(bioConstraintsLayer){ map.removeLayer(bioConstraintsLayer); bioConstraintsLayer = null; }
+  bioConstraintsLayer = L.geoJSON(fc, {
+    style: f => ({ color:'#222', weight:1, fillColor: BIO_CONSTRAINT_COLORS[f.properties.tier] || '#888', fillOpacity:0.55 }),
+    onEachFeature:(f,l)=> l.bindPopup(`<div style="min-width:140px;"><b>${f.properties.tier} constraint</b><br>${f.properties.areaHectares} ha</div>`)
+  }).addTo(map);
+
+  const order = ['High','Medium','Low'];
+  const byTier = {};
+  fc.features.forEach(f=> byTier[f.properties.tier] = f.properties.areaHectares);
+
+  const el = document.getElementById('bioConstraintsResult');
+  el.innerHTML = order.filter(t=> byTier[t] != null).map(t=>`
+    <div class="bc-tier-summary">
+      <span class="bc-tier-swatch" style="background:${BIO_CONSTRAINT_COLORS[t]};"></span>
+      <span class="bc-tier-name">${t}</span>
+      <span class="bc-tier-ha">${byTier[t].toFixed(2)} ha</span>
+    </div>`).join('') + `
+    <div style="display:flex;gap:6px;margin-top:10px;">
+      <button class="secondary" id="bcExportGeojson" style="flex:1;">GeoJSON</button>
+      <button class="secondary" id="bcExportShp" style="flex:1;">Shapefile</button>
+    </div>`;
+
+  document.getElementById('bcExportGeojson').addEventListener('click', ()=>{
+    downloadBlob('biodiversity-constraints.geojson', JSON.stringify(bioConstraintsResultFC), 'application/geo+json');
+  });
+  document.getElementById('bcExportShp').addEventListener('click', (e)=>{
+    exportShapefile(bioConstraintsResultFC, 'biodiversity-constraints', { field:'tier', colorMap: BIO_CONSTRAINT_COLORS }, e.target);
+  });
 }
 
 // One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
