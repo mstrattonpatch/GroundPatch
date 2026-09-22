@@ -822,7 +822,7 @@ function bufferGeomFor(lyr){ return lyr.bufferKm === CONTEXT_BUFFER_KM ? context
    where CORS doesn't apply at all.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee'];
+const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'mapprod3.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
   catch(e){ return false; }
@@ -1041,9 +1041,16 @@ function looksLikeLotDP(q){
   return /\b(DP|SP)\s?\d+/i.test(q);
 }
 
-function arcgisFetchJSON(url){
+async function arcgisFetchJSON(url){
   console.log('[address/lot search] requesting:', url);
-  return fetch(url).then(async resp=>{
+  // Same fix as postQuery()/postOverpassQuery() for the same failure mode:
+  // without a timeout, a stalled address/Lot-DP server left the Search
+  // button stuck on "Searching…" (or the suggestions dropdown silently
+  // never appearing) forever, with no way to recover short of reloading.
+  const controller = new AbortController();
+  const timer = setTimeout(()=> controller.abort(), ARCGIS_QUERY_TIMEOUT_MS);
+  try{
+    const resp = await fetch(url, { signal: controller.signal });
     if(!resp.ok){ const e = new Error(`HTTP ${resp.status}`); e.requestUrl = url; throw e; }
     const gj = await resp.json();
     if(gj.error){
@@ -1055,10 +1062,20 @@ function arcgisFetchJSON(url){
       throw e;
     }
     return gj;
-  }).catch(err=>{
-    if(!err.requestUrl) err.requestUrl = url; // network-level failures (e.g. Failed to fetch) land here
+  }catch(err){
+    // DOMException.message is read-only in Chromium, so mutating a caught
+    // AbortError's .message silently no-ops — throw a fresh Error instead,
+    // same as postQuery()'s equivalent timeout handling.
+    if(err.name === 'AbortError'){
+      const timeoutErr = new Error(`timed out after ${ARCGIS_QUERY_TIMEOUT_MS/1000}s`);
+      timeoutErr.requestUrl = url;
+      throw timeoutErr;
+    }
+    if(!err.requestUrl) err.requestUrl = url; // other network-level failures land here
     throw err;
-  });
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 async function fetchLotByPlanLabel(input){
