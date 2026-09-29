@@ -952,12 +952,21 @@ function handleFile(file){
   const ext = file.name.split('.').pop().toLowerCase();
   fileStatus.innerHTML = `Reading <strong>${file.name}</strong>…`;
 
+  // If several separate polygon parts got combined into one MultiPolygon,
+  // say so in the loaded-file label — otherwise "2 polygons, not joined"
+  // silently becoming one boundary would be invisible to the user.
+  const labelWithPartCount = geom =>
+    (geom.type === 'MultiPolygon' && geom.coordinates.length > 1)
+      ? `${file.name} (${geom.coordinates.length} polygons combined)`
+      : file.name;
+
   if(ext==='geojson' || ext==='json'){
     const reader = new FileReader();
     reader.onload = e => {
       try{
         const gj = JSON.parse(e.target.result);
-        loadGeometry(extractGeometry(gj), file.name);
+        const geom = extractGeometry(gj);
+        loadGeometry(geom, labelWithPartCount(geom));
       }catch(err){ fail('Could not parse GeoJSON: ' + err.message); }
     };
     reader.readAsText(file);
@@ -967,7 +976,7 @@ function handleFile(file){
     reader.onload = e => {
       try{
         const geom = parseKML(e.target.result);
-        loadGeometry(geom, file.name);
+        loadGeometry(geom, labelWithPartCount(geom));
       }catch(err){ fail('Could not parse KML: ' + err.message); }
     };
     reader.readAsText(file);
@@ -980,7 +989,8 @@ function handleFile(file){
     const reader = new FileReader();
     reader.onload = e => {
       shp(e.target.result).then(gj=>{
-        loadGeometry(extractGeometry(gj), file.name);
+        const geom = extractGeometry(gj);
+        loadGeometry(geom, labelWithPartCount(geom));
       }).catch(err=> fail('Could not parse shapefile: ' + err.message));
     };
     reader.readAsArrayBuffer(file);
@@ -998,9 +1008,17 @@ function fail(msg){
 function extractGeometry(gj){
   if(!gj) throw new Error('empty file');
   if(gj.type === 'FeatureCollection'){
-    const f = gj.features.find(f => f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon'));
-    if(!f) throw new Error('no polygon features found');
-    return f.geometry;
+    const polys = gj.features.filter(f => f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon'));
+    if(!polys.length) throw new Error('no polygon features found');
+    if(polys.length === 1) return polys[0].geometry;
+    // A shapefile can legitimately hold several separate, unjoined boundary
+    // parts as distinct records (e.g. a site split by a road) — combine every
+    // polygon feature into one MultiPolygon rather than silently using only
+    // the first, so the whole set becomes a single subject site boundary.
+    const allRings = polys.flatMap(f =>
+      f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates
+    );
+    return { type:'MultiPolygon', coordinates: allRings };
   }
   if(gj.type === 'Feature') return gj.geometry;
   if(gj.type === 'Polygon' || gj.type === 'MultiPolygon') return gj;
