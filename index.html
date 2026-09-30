@@ -23,11 +23,6 @@
      refuse to execute it (blocked by the nosniff header) — .iife.js is the
      same code, built for exactly this plain-<script>-tag use case. -->
 <script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.iife.js"></script>
-<!-- docx/watermarks: a separate sub-bundle (not part of the main docx build
-     above) exposing ImageWatermark/TextWatermark as a global `docxWatermarks`
-     — it must load after the main docx script since it references that
-     global directly rather than bundling its own copy. -->
-<script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/watermarks.iife.js"></script>
 <style>
   :root{
     --ink:#1E2A24;
@@ -3564,9 +3559,11 @@ function renderSpeciesSightingsResult(result){
     <div style="display:flex;gap:6px;">
       <button class="secondary" id="exportSightings" style="flex:1;">Export records (.xlsx)</button>
       <button class="secondary" id="exportSightingsDocx" style="flex:1;">Export summary (.docx)</button>
-    </div>`;
+    </div>
+    <button class="secondary" id="exportSightingsShp" style="width:100%;margin-top:6px;">Export records (Shapefile)</button>`;
   document.getElementById('exportSightings').addEventListener('click', ()=> exportSpeciesSightings(result));
   document.getElementById('exportSightingsDocx').addEventListener('click', ()=> exportSpeciesSightingsDocx(result));
+  document.getElementById('exportSightingsShp').addEventListener('click', e => exportThreatenedSpeciesShapefile(result, e.target));
   document.getElementById('toggleSightingsMap').addEventListener('change', e=>{
     if(!sightingsMapLayerGroup) return;
     if(e.target.checked) sightingsMapLayerGroup.addTo(map);
@@ -3680,6 +3677,38 @@ function exportSpeciesSightings(result){
   XLSX.writeFile(wb, 'threatened-species-sightings-' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
+// One point feature per qualifying sighting record — reuses the same
+// generic Shapefile/QML encoder every other layer's export button does
+// (buildShapefileParts/exportShapefile), extended to support Point
+// geometry (previously Polygon/PolyLine only). Field names are kept to
+// DBF's 10-character limit up front so nothing gets silently truncated
+// into an ambiguous name. Categorised by Class in the auto-applied .qml,
+// using the same colours as the map markers and Excel export.
+async function exportThreatenedSpeciesShapefile(result, btn){
+  const features = result.records.map(f=>{
+    const props = f.properties || {};
+    return {
+      type:'Feature',
+      properties:{
+        SciName: pickSightingField(props, 'scientificName') || '',
+        CommonName: pickSightingField(props, 'commonName') || '',
+        Kingdom: pickSightingField(props, 'kingdom') || '',
+        Class: pickSightingField(props, 'class') || '',
+        RecordDate: formatSightingDate(pickSightingField(props, 'recordDate')) || '',
+        StateStat: resolveConservationStatus(props, 'state', result.legalStatusLookup),
+        CthStat: resolveConservationStatus(props, 'country', result.legalStatusLookup),
+        DistanceM: f._distanceM != null ? Math.round(f._distanceM) : '',
+        WithinSite: result.withinSiteSet.has(f) ? 'Yes' : 'No',
+      },
+      geometry: f.geometry
+    };
+  });
+  const classColorMap = {};
+  [...result.countByClass.keys()].forEach(k => { classColorMap[k] = classSymbolFor(k).color; });
+  await exportShapefile({ type:'FeatureCollection', features }, 'threatened-species-sightings-' + new Date().toISOString().slice(0,10),
+    { field:'Class', colorMap: classColorMap }, btn);
+}
+
 /* =========================================================
    Word (.docx) summary — one table per Kingdom/Class group, styled to
    match the department's existing house template (generate_word_report.js):
@@ -3696,12 +3725,11 @@ const DOCX_HEADER_LABELS = ['Scientific Name', 'Common Name', 'Legal Status', 'N
 const DOCX_COL_WIDTHS = [2200, 2200, 1500, 1100, 1700, 1700]; // DXA, sums to 10400
 const DOCX_TABLE_WIDTH = DOCX_COL_WIDTHS.reduce((a,b)=>a+b, 0);
 
-// GroundPatch logo watermark, embedded inline (200x200 JPEG, ~2KB base64) so
-// the export stays a single self-contained file with no extra network
-// request. docx's own ImageWatermark (from the separate docxWatermarks
-// bundle above) renders this centred behind the page text on every page,
-// exactly like Word's own Design > Watermark command.
-const DOCX_WATERMARK_JPEG_BASE64 = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBwgHBgkIBwgVFAkVFyAPGRYVGRsUIBwWIB0iIiAdHx8kKDQsJCYxJx8fLTstMT03MDAwIys0TT8uQDQ5MDcBCgoKDQ0NGg0QDisZHxkyMSsrKysrKysrKysrNysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrK//AABEIAMgAyAMBIgACEQEDEQH/xAAbAAEBAQADAQEAAAAAAAAAAAAABQQBAgMGB//EAEEQAQABAwECBwwHBwUAAAAAAAABAgMEBREhEjE1UXKRswYTFjJBU1VhcYGT0SIjQlJidLIUFTZGobHCJEOCkqP/xAAWAQEBAQAAAAAAAAAAAAAAAAAAAQL/xAAZEQEBAQADAAAAAAAAAAAAAAAAAREhMWH/2gAMAwEAAhEDEQA/AP2QBloAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABxVXTR49UR7dzr36152OuEjXMaxl6ppFnLsU12pqrng1xFUeJPklp8H9F9EWPhUfIRu79a87HXB36152OuGHwf0X0RY+FR8jwf0X0RY+FR8g5bu/WvOx1w7xMTG2J3J3g/ovoix8Kj5POruc0mJ22MOLVfPZmbM9dMwHKqI9VrVdM+nYuzk40cdFeyLkR+GqNkVeydk+tQwM3H1DHi/jV7aPFmJjZMTHHTMTviY5g1oAFAAAAAAAAAAAAAAAAS9S5a0fpXOzlUS9S5a0fpXOzlUEABQABF1a3+68n9848fV7qb9Mfat/f9tPH66dvqWnFyim7bqt3KdtExwZifLEiOYmJiJidwl9zVVUaVTj3J212aqsaZnmoqmKZ99MRPvVAABQAAAAAAAAAAAAAEvUuWtH6Vzs5VEvUuWtH6Vzs5VBAAUAAABK0Tdm61RHFGRt67Vuf7yqvnu5LK/a8nXrseL+1TTHriKKKYn+j6ESAAoAAAAAAAAAAAAACXqXLWj9K52cqiXqXLWj9K52cqggAKAAJ+uZleJhcHG35lye82o/HPl9kRtmfVEtOdmWMDGryMq5stx79s+SIjyzPMw6ZjX8nKnVNRo4N2Y4Nu3P+3bnj2/jndt5t0e0jP3M4lGBlaph2vEoqt0xM+X6miNs+udi6laXyzrXTo7KlVCAAoAAAAAAAAAAAAACXqXLWj9K52cqiXqXLWj9K52cqggAKwZ2q2sPJoxu8XLl+aeHwbdPC+jt2bZnije8JzNYyd2LpkWo+9frj9NG3b1w5/mqPy/+aqImYuk7MmjL1HIm9lU+LMxwaaOhR5PbO2fWpgCVpnLes9K32cKqVpnLes9K32cKoQAFAAAAAAAAAAAAAAS9S5a0fpXOzlUStUmKdZ0eap2Rwq+zlT77b85HWI7Dr3235yOs77b85HWKmfzVP5f/ADVUmiqmruqq4NUT/p44unKsJAAVK0zlvWelb7OFVK0vfrWs9K3H/nCqJAAUAAAAAAAAAAAAAB4ZmDiZ1FNGbi0XKY3xFdMVbJ97J4P6L6IsfCo+SkCZ4m+D+i+iLHwqPkeD+i+iLHwqPkpAZELBwcTB7p7tGFi0W6Jx4mYopinbPDnfuXUqj+Krv5en9dSqEAZtTzaNPwL2VcjbFMbojjmriimPXM7I94Mei/WZusZEeLN/gR/wt0Uz/WKlVi0TDrwdLsWL07b2zh1zz3KpmqqeuZbQgAKAAAAAAAAAAAAAAAAAAlUfxVe/L0frrVUDK1HC0/uou1Z2XRbiceiI4dUU7fp18W3jaZ7ocO5uwbdy/XzWqKpj/tOymOsZ1VrqpooqrrqiKY3zM7tkI2NwtczbWbVExp1ueFaid3fK/OTH3Y+zz+NzOf2DM1WuK9ZiKcWJ2xj0zwonmm5V9roxu6SzEbI2RxC9gAoAAAAAAAAAAAAAAAAAAAB5doAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/9k=';
+// GroundPatch logo, embedded inline (200x200 JPEG, ~2KB base64) so the
+// export stays a single self-contained file with no extra network request —
+// placed small and right-aligned in the page footer (bottom-right corner of
+// every page), not as a full-page watermark.
+const DOCX_LOGO_JPEG_BASE64 = 'data:image/jpeg;base64,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';
 
 // Animalia/Plantae -> Fauna/Flora (matching the house template's grouping
 // labels); anything else (Fungi, Chromista, ...) keeps its own raw kingdom
@@ -3807,9 +3835,7 @@ function docxBuildTable(bannerText, rows){
 
 async function exportSpeciesSightingsDocx(result){
   if(typeof docx === 'undefined'){ alert('The Word export library did not load — check network access to jsdelivr.'); return; }
-  if(typeof docxWatermarks === 'undefined'){ alert('The Word watermark library did not load — check network access to jsdelivr.'); return; }
-  const { Document, Packer, Paragraph, TextRun, Header } = docx;
-  const { ImageWatermark } = docxWatermarks;
+  const { Document, Packer, Paragraph, TextRun, ImageRun, Footer, AlignmentType } = docx;
 
   const species = aggregateSightingsBySpecies(result.records, result.legalStatusLookup);
   const kingdoms = {};
@@ -3863,13 +3889,14 @@ async function exportSpeciesSightingsDocx(result){
           margin: { top:720, bottom:720, left:720, right:720 },
         },
       },
-      headers: {
-        default: new Header({
+      footers: {
+        default: new Footer({
           children: [new Paragraph({
-            children: [new ImageWatermark({
+            alignment: AlignmentType.RIGHT,
+            children: [new ImageRun({
               type: 'jpg',
-              data: DOCX_WATERMARK_JPEG_BASE64,
-              transformation: { width: 300, height: 300 },
+              data: DOCX_LOGO_JPEG_BASE64,
+              transformation: { width: 50, height: 50 },
             })],
           })],
         }),
@@ -3949,11 +3976,16 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
   }
 });
 
-// Minimal ESRI Shapefile encoder — Polygon (type 5) and PolyLine (type 3) only,
-// which covers every layer in this tool. No external dependencies, so this
-// can't hit a library-version conflict the way shp-write did. Round-trip
-// verified against an independent Python shapefile reader before shipping.
-function shpShapeTypeFor(geomType){ return /Polygon/.test(geomType) ? 5 : 3; }
+// Minimal ESRI Shapefile encoder — Polygon (type 5), PolyLine (type 3) and
+// Point (type 1, for species sighting records), which covers every layer in
+// this tool. No external dependencies, so this can't hit a library-version
+// conflict the way shp-write did. Round-trip verified against an
+// independent Python shapefile reader before shipping.
+function shpShapeTypeFor(geomType){
+  if(/Polygon/.test(geomType)) return 5;
+  if(/Point/.test(geomType)) return 1;
+  return 3;
+}
 
 function ringsFromGeometry(geom){
   if(geom.type === 'Polygon') return geom.coordinates;
@@ -3980,36 +4012,52 @@ function buildShpAndShx(features){
   let xmin=Infinity, ymin=Infinity, xmax=-Infinity, ymax=-Infinity;
   const recordContents = [];
 
-  features.forEach(f=>{
-    const rings = ringsFromGeometry(f.geometry);
-    const parts = [];
-    const points = [];
-    rings.forEach(ring=>{
-      parts.push(points.length);
-      ring.forEach(([x,y])=>{
-        points.push([x,y]);
-        if(x<xmin)xmin=x; if(x>xmax)xmax=x;
-        if(y<ymin)ymin=y; if(y>ymax)ymax=y;
-      });
+  if(shapeType === 1){
+    // Point: a fixed 20-byte record — shape type + X + Y — no parts/points
+    // arrays or per-record bounding box the way polygons/lines need.
+    features.forEach(f=>{
+      const [x,y] = f.geometry.coordinates;
+      if(x<xmin)xmin=x; if(x>xmax)xmax=x;
+      if(y<ymin)ymin=y; if(y>ymax)ymax=y;
+      const buf = new ArrayBuffer(20);
+      const dv = new DataView(buf);
+      dv.setInt32(0, shapeType, true);
+      dv.setFloat64(4, x, true);
+      dv.setFloat64(12, y, true);
+      recordContents.push(buf);
     });
-    let fxmin=Infinity, fymin=Infinity, fxmax=-Infinity, fymax=-Infinity;
-    points.forEach(([x,y])=>{ if(x<fxmin)fxmin=x; if(x>fxmax)fxmax=x; if(y<fymin)fymin=y; if(y>fymax)fymax=y; });
-    const numParts = parts.length, numPoints = points.length;
-    const contentBytes = 4+32+4+4 + numParts*4 + numPoints*16;
-    const buf = new ArrayBuffer(contentBytes);
-    const dv = new DataView(buf);
-    let off = 0;
-    dv.setInt32(off, shapeType, true); off += 4;
-    dv.setFloat64(off, fxmin, true); off += 8;
-    dv.setFloat64(off, fymin, true); off += 8;
-    dv.setFloat64(off, fxmax, true); off += 8;
-    dv.setFloat64(off, fymax, true); off += 8;
-    dv.setInt32(off, numParts, true); off += 4;
-    dv.setInt32(off, numPoints, true); off += 4;
-    parts.forEach(p=>{ dv.setInt32(off, p, true); off += 4; });
-    points.forEach(([x,y])=>{ dv.setFloat64(off, x, true); off += 8; dv.setFloat64(off, y, true); off += 8; });
-    recordContents.push(buf);
-  });
+  } else {
+    features.forEach(f=>{
+      const rings = ringsFromGeometry(f.geometry);
+      const parts = [];
+      const points = [];
+      rings.forEach(ring=>{
+        parts.push(points.length);
+        ring.forEach(([x,y])=>{
+          points.push([x,y]);
+          if(x<xmin)xmin=x; if(x>xmax)xmax=x;
+          if(y<ymin)ymin=y; if(y>ymax)ymax=y;
+        });
+      });
+      let fxmin=Infinity, fymin=Infinity, fxmax=-Infinity, fymax=-Infinity;
+      points.forEach(([x,y])=>{ if(x<fxmin)fxmin=x; if(x>fxmax)fxmax=x; if(y<fymin)fymin=y; if(y>fymax)fymax=y; });
+      const numParts = parts.length, numPoints = points.length;
+      const contentBytes = 4+32+4+4 + numParts*4 + numPoints*16;
+      const buf = new ArrayBuffer(contentBytes);
+      const dv = new DataView(buf);
+      let off = 0;
+      dv.setInt32(off, shapeType, true); off += 4;
+      dv.setFloat64(off, fxmin, true); off += 8;
+      dv.setFloat64(off, fymin, true); off += 8;
+      dv.setFloat64(off, fxmax, true); off += 8;
+      dv.setFloat64(off, fymax, true); off += 8;
+      dv.setInt32(off, numParts, true); off += 4;
+      dv.setInt32(off, numPoints, true); off += 4;
+      parts.forEach(p=>{ dv.setInt32(off, p, true); off += 4; });
+      points.forEach(([x,y])=>{ dv.setFloat64(off, x, true); off += 8; dv.setFloat64(off, y, true); off += 8; });
+      recordContents.push(buf);
+    });
+  }
 
   const headerLen = 100;
   let totalContentLen = 0;
@@ -4205,6 +4253,21 @@ function buildSymbolXML(id, geomKind, rgb, opacity, widthMm, outlineOnly){
       </layer>
     </symbol>`;
   }
+  if(geomKind === 'point'){
+    return `<symbol type="marker" name="${id}" alpha="1" force_rhr="0">
+      <layer class="SimpleMarker" enabled="1">
+        <Option type="Map">
+          <Option type="QString" name="color" value="${r},${g},${b},255"/>
+          <Option type="QString" name="outline_color" value="255,255,255,255"/>
+          <Option type="QString" name="outline_width" value="0.2"/>
+          <Option type="QString" name="outline_width_unit" value="MM"/>
+          <Option type="QString" name="size" value="3"/>
+          <Option type="QString" name="size_unit" value="MM"/>
+          <Option type="QString" name="name" value="circle"/>
+        </Option>
+      </layer>
+    </symbol>`;
+  }
   const fillStyle = outlineOnly ? 'no' : 'solid';
   const fillColorVal = outlineOnly ? `${r},${g},${b},0` : `${r},${g},${b},255`;
   return `<symbol type="fill" name="${id}" alpha="${opacity}" force_rhr="0">
@@ -4221,7 +4284,7 @@ function buildSymbolXML(id, geomKind, rgb, opacity, widthMm, outlineOnly){
 }
 function buildQML(geojson, styleOpts){
   const firstGeomType = (geojson.features[0] && geojson.features[0].geometry) ? geojson.features[0].geometry.type : 'Polygon';
-  const geomKind = /Line/.test(firstGeomType) ? 'line' : 'fill';
+  const geomKind = /Line/.test(firstGeomType) ? 'line' : /Point/.test(firstGeomType) ? 'point' : 'fill';
   const opacity = geomKind === 'fill' ? 0.6 : 1;
 
   let useField = null;
