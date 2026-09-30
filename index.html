@@ -630,6 +630,7 @@
         </div>
         <div id="addressSuggestions"></div>
       </div>
+      <div id="lotSearchHint" style="display:none;font-size:11px;color:var(--ink-soft);margin:-2px 0 6px;line-height:1.4;">Tip: a plan number on its own (e.g. DP709613) searches every lot on that plan and is noticeably slower — include the lot number too (e.g. 1/DP709613) for a much faster, indexed search.</div>
       <button class="secondary" id="runAddressSearch">Search</button>
       <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
     </section>
@@ -1080,7 +1081,20 @@ function looksLikeLotDP(q){
   return /\b(DP|SP)\s?\d+/i.test(q);
 }
 
+// One retry after a short pause, same reasoning as queryLayer()'s retry —
+// costs nothing on the common success path, and rides out a transient blip
+// on the government server or the proxy instead of failing outright.
 async function arcgisFetchJSON(url){
+  try{
+    return await attemptArcgisFetchJSON(url);
+  }catch(err){
+    console.warn('[address/lot search] first attempt failed, retrying once after a short pause.', err);
+    await new Promise(r => setTimeout(r, 1500));
+    return await attemptArcgisFetchJSON(url);
+  }
+}
+
+async function attemptArcgisFetchJSON(url){
   console.log('[address/lot search] requesting:', url);
   // Same fix as postQuery()/postOverpassQuery() for the same failure mode:
   // without a timeout, a stalled address/Lot-DP server left the Search
@@ -1122,8 +1136,15 @@ async function fetchLotByPlanLabel(input){
   // LOT_DP stores just digits, e.g. "1/1174562" — confirmed against the live
   // service — not "1/DP1174562" as the user-facing "DP"/"SP" label suggests
   // (that letter prefix only lives in PLANLABEL/TAG). Strip it before querying.
-  // When a lot number is given, match lot+plan as a prefix; a bare plan number
-  // ("DP1174562", no "/") is matched as a suffix to find whichever lot(s) are on it.
+  // When a lot number is given, match lot+plan as a prefix ("1/1174562%") —
+  // a leading-anchored LIKE, which a standard index can use. A bare plan
+  // number ("DP1174562", no "/") has to be matched as a suffix
+  // ("%/1174562") instead, to find whichever lot(s) are on that plan — but a
+  // LEADING wildcard can't use that same index, forcing a full scan of the
+  // whole statewide LOT_DP column server-side. That's the likely reason a
+  // bare plan number search is noticeably slower than a lot+plan one; there's
+  // no client-side fix for that (it's the ArcGIS service's own query planner),
+  // so the UI surfaces a tip to include the lot number when it's known.
   const parts = cleaned.split('/');
   const planNumber = parts[parts.length - 1].replace(/^(DP|SP)/, '');
   const lotNumber = parts.length > 1 ? parts[0] : null;
@@ -1134,7 +1155,12 @@ async function fetchLotByPlanLabel(input){
     outFields:'*',
     returnGeometry:'true',
     outSR:'4326',
-    resultRecordCount: lotNumber ? '6' : '50'
+    // Capped well below the previous 50 for the ambiguous bare-plan-number
+    // case — the WHERE filter has already done its (slow) work by the time
+    // this limit applies, but a big subdivision plan can still have dozens
+    // of lots, and there's no reason to serialize/transfer that many full
+    // polygon geometries just to tell the user "be more specific".
+    resultRecordCount: lotNumber ? '6' : '12'
   });
   let gj;
   try{
@@ -1244,7 +1270,18 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
   if(!query){ statusEl.innerHTML = '<span class="err">Type an address or Lot/DP first.</span>'; return; }
 
   const original = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Searching…';
+  btn.disabled = true;
+  // A bare plan number (no lot number) forces a slow, unindexed suffix
+  // search server-side — see the comment in fetchLotByPlanLabel(). Ticking
+  // seconds while it runs makes that wait legible instead of a dead
+  // "Searching…" that looks stuck, and flags the exact case worth
+  // mentioning the lot-number tip for.
+  const t0 = performance.now();
+  const tickTimer = setInterval(()=>{
+    const secs = Math.round((performance.now() - t0) / 1000);
+    btn.textContent = `Searching… (${secs}s)`;
+  }, 1000);
+  btn.textContent = 'Searching…';
   statusEl.innerHTML = '';
   try{
     let geom, label;
@@ -1263,6 +1300,7 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
   }finally{
+    clearInterval(tickTimer);
     btn.disabled = false; btn.textContent = original;
   }
 });
@@ -1275,6 +1313,17 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
 let addressSuggestTimer = null;
 const addressInput = document.getElementById('addressLotInput');
 const suggestBox = document.getElementById('addressSuggestions');
+const lotSearchHint = document.getElementById('lotSearchHint');
+
+// A bare plan number ("DP709613", no "1/" in front) — the slow, unindexed
+// search path. Only shown once "DP"/"SP" plus digits is actually typed, not
+// on every keystroke of an address.
+function isBarePlanNumber(text){
+  return looksLikeLotDP(text) && !text.includes('/');
+}
+addressInput.addEventListener('input', ()=>{
+  lotSearchHint.style.display = isBarePlanNumber(addressInput.value.trim()) ? 'block' : 'none';
+});
 
 addressInput.addEventListener('input', ()=>{
   const text = addressInput.value.trim();
