@@ -17,9 +17,12 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
 <!-- docx: builds the species sightings Word (.docx) summary client-side via
-     Packer.toBlob() — this UMD build exposes a global `docx` and works with
-     no bundler, same pattern as the other CDN libraries above. -->
-<script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.umd.cjs"></script>
+     Packer.toBlob() — exposes a global `docx`, no bundler needed. Loads the
+     package's .iife.js build specifically, not .umd.cjs: jsdelivr doesn't
+     map the .cjs extension to a JavaScript content-type, and browsers then
+     refuse to execute it (blocked by the nosniff header) — .iife.js is the
+     same code, built for exactly this plain-<script>-tag use case. -->
+<script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.iife.js"></script>
 <style>
   :root{
     --ink:#1E2A24;
