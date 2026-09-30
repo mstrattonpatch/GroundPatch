@@ -2104,6 +2104,30 @@ function buildSiteContext(){
           sources
         };
       }).filter(t => t.areaHectares > 0 || t.sources.length)
+    } : null,
+    // Live BioNet threatened species screening result (see "Fetch threatened
+    // species list"), if generated this session — null otherwise. generalNotes
+    // is trimmed since some run to several paragraphs; the full text is in
+    // the exported Excel, not needed for a chat answer.
+    threatenedSpecies: (window.tsResult && window.tsResult.matches && window.tsResult.matches.length) ? {
+      sitePcts: window.tsResult.sitePcts,
+      siteIbraSubregions: window.tsResult.siteIbra,
+      totalSpecies: window.tsResult.matches.length,
+      species: window.tsResult.matches.map(sp => ({
+        scientificName: sp.scientificName,
+        commonName: sp.vernacularName || null,
+        stateConservation: sp.stateConservation || null,
+        countryConservation: sp.countryConservation || null,
+        matchedPcts: sp.matchedPcts,
+        classOfCredit: sp.classOfCredit || null,
+        monthsOfSurvey: sp.monthsOfSurvey || null,
+        sensitivityToLoss: sp.sensitivityToLoss || null,
+        sensitivityToPotentialGain: sp.sensitivityToPotentialGain || null,
+        SAII: sp.SAII || null,
+        SAIIBreeding: sp.SAIIBreeding || null,
+        occupyPaddockTrees: sp.occupyPaddockTrees || null,
+        generalNotes: sp.generalNotes ? (sp.generalNotes.length > 220 ? sp.generalNotes.slice(0,220) + '…' : sp.generalNotes) : null
+      }))
     } : null
   };
 }
