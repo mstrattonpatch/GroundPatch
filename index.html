@@ -2647,12 +2647,17 @@ function exportBioConstraintsXlsx(){
 ========================================================= */
 const BIONET_ODATA_BASE = 'https://data.bionet.nsw.gov.au/biosvcapp/odata';
 const TS_SPECIES_FIELDS = [
-  'scientificName','vernacularName','stateConservation','countryConservation',
+  'profileID','scientificName','vernacularName','stateConservation','countryConservation',
   'kingdom','family','classOfCredit','patchSize','nativeVegetationCover',
   'associatedPCTs','habitatConstraints','habitatConstraintsForaging','habitatConstraintsBreeding',
-  'monthsOfSurvey','monthsOfSurveyForaging','monthsOfSurveyBreeding','occupyPaddockTrees','unitOfMeasure',
-  'sensitivityToLoss','sensitivityToPotentialGain','SAII','SAIIBreeding','SAIIForaging','generalNotes'
+  'monthsOfSurvey','monthsOfSurveyForaging','monthsOfSurveyBreeding','occupyPaddockTrees','occupyPaddockTreesComment',
+  'geographicDistribution','unitOfMeasure','offsetMultiplier','surveyComments','levelOfBiodiversityConcern',
+  'sensitivityToLoss','sensitivityToPotentialGain','sensitivityToPotentialGainForaging','sensitivityToPotentialGainBreeding',
+  'SAII','SAIIBreeding','SAIIForaging','generalNotes'
 ];
+// A separate small table (species taxonomy/authority list) for the one field
+// Summary needs that ThreatenedBiodiversity_Species doesn't carry.
+const TS_SPECIESNAMES_FIELDS = ['scientificName','primaryGrowthFormGroup'];
 const CALENDAR_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // Colours lifted directly from the department's own Target List workbook
@@ -2754,9 +2759,10 @@ async function fetchThreatenedSpeciesForSite(){
   statusEl.textContent = 'Querying BioNet…';
 
   try{
-    const [speciesRows, geoRows] = await Promise.all([
+    const [speciesRows, geoRows, nameRows] = await Promise.all([
       fetchBioNetODataAll('ThreatenedBiodiversity_Species', TS_SPECIES_FIELDS),
-      fetchBioNetODataAll('ThreatenedBiodiversity_TSGeographicData', TS_GEO_FIELDS)
+      fetchBioNetODataAll('ThreatenedBiodiversity_TSGeographicData', TS_GEO_FIELDS),
+      fetchBioNetODataAll('SpeciesNames', TS_SPECIESNAMES_FIELDS)
     ]);
 
     const geoByName = new Map(); // scientificName -> Set(IBRA subregions documented for it)
@@ -2765,6 +2771,8 @@ async function fetchThreatenedSpeciesForSite(){
       if(!geoByName.has(r.scientificName)) geoByName.set(r.scientificName, new Set());
       geoByName.get(r.scientificName).add(r.IBRASubregion);
     });
+    const growthFormByName = new Map();
+    nameRows.forEach(r=>{ if(r.scientificName && r.primaryGrowthFormGroup) growthFormByName.set(r.scientificName, r.primaryGrowthFormGroup); });
 
     const sitePctSet = new Set(sitePcts);
     const siteIbraSet = new Set(siteIbra);
@@ -2781,7 +2789,20 @@ async function fetchThreatenedSpeciesForSite(){
         const ibraMatch = ibraForSpecies && [...siteIbraSet].some(i => ibraForSpecies.has(i));
         if(!ibraMatch) return;
       }
-      matches.push(Object.assign({}, sp, { matchedPcts }));
+      // "Reason for Consideration" per the Summary sheet's own hierarchy
+      // (Found during survey > Atlas record > SAII > SAII Breeding > MNES >
+      // BAM Candidate) — only SAII/SAII Breeding are things this PCT/IBRA
+      // query can actually evaluate; the rest need survey/Atlas/MNES data
+      // this tool doesn't have, so this is a partial, honest subset only.
+      let reasonForConsideration = '';
+      if(String(sp.SAII).toLowerCase() === 'true') reasonForConsideration = 'SAII';
+      else if(String(sp.SAIIBreeding).toLowerCase() === 'true') reasonForConsideration = 'SAII Breeding';
+      matches.push(Object.assign({}, sp, {
+        matchedPcts,
+        primaryGrowthFormGroup: growthFormByName.get(sp.scientificName) || '',
+        _considerationRequired: reasonForConsideration ? 'Yes' : '',
+        _reasonForConsideration: reasonForConsideration
+      }));
     });
 
     window.tsResult = { matches, sitePcts, siteIbra };
@@ -2810,89 +2831,32 @@ function renderThreatenedSpeciesResult(result){
   document.getElementById('exportTsBySpecies').addEventListener('click', ()=> exportThreatenedSpeciesBySpecies(result));
 }
 
-// Matches the exact "Copy/Paste Data from 'TS by PCT by IBRAsub' PQ" column
-// layout in the department's own Target List workbook (Summary sheet, row
-// 4), so this can be pasted straight into that working sheet. "Matched PCT"
-// is the one column added beyond their spec — otherwise a "by PCT" export
-// wouldn't show which PCT each row matched. Predicted/Candidate Species and
-// Specific Survey Requirements are left blank: those are BAM classifications
-// their own spreadsheet derives from Atlas/MNES/survey inputs this PCT/IBRA
-// screening doesn't have access to.
-function exportThreatenedSpeciesByPct(result){
-  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
-  const rows = [
-    ['THREATENED SPECIES BY PCT (BioNet ThreatenedBiodiversity_Species — live query)'],
-    ['Generated', new Date().toLocaleString()],
-    ['Subject site PCTs', result.sitePcts.join(', ')],
-    ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: Predicted/Candidate Species columns and Specific Survey Requirements are left blank — those need the department\'s full BAM assessment (Atlas/MNES/survey data), not just PCT/IBRA screening.'],
-    [],
-    ['Matched PCT','Scientific Name','Kingdom','Class of Credit','Predicted Species','Predicted Species (foraging)','Candidate Species','Candidate Species (breeding)',
-     'Patch Size','Native Vegetation Cover','Habitat Constraints','Habitat Constraints (Foraging)','Habitat Constraints (Breeding)','Specific Survey Requirements',
-     'Months Of Survey', ...CALENDAR_MONTHS, 'Months Of Survey (Foraging)','Months Of Survey (Breeding)','Occupy Paddock Trees','Unit of Measure',
-     'SAII','SAII Breeding','SAII Foraging','Sensitivity To Loss','Sensitivity To Potential Gain','General Notes']
-  ];
-  const expanded = [];
-  result.matches.forEach(sp=> sp.matchedPcts.forEach(pct => expanded.push([pct, sp])));
-  expanded.sort((a,b)=> a[0].localeCompare(b[0], undefined, {numeric:true}) || a[1].scientificName.localeCompare(b[1].scientificName));
-  expanded.forEach(([pct, sp])=>{
-    const surveyMonths = new Set(splitSemicolonList(sp.monthsOfSurvey).map(m=>m.toLowerCase()));
-    const monthCells = CALENDAR_MONTHS.map(m => surveyMonths.has(m.toLowerCase()) ? 'X' : '');
-    rows.push([
-      pct, sp.scientificName, sp.kingdom || '', sp.classOfCredit || '', '', '', '', '',
-      sp.patchSize || '', sp.nativeVegetationCover || '', sp.habitatConstraints || '', sp.habitatConstraintsForaging || '', sp.habitatConstraintsBreeding || '', '',
-      sp.monthsOfSurvey || '', ...monthCells, sp.monthsOfSurveyForaging || '', sp.monthsOfSurveyBreeding || '', sp.occupyPaddockTrees || '', sp.unitOfMeasure || '',
-      sp.SAII || '', sp.SAIIBreeding || '', sp.SAIIForaging || '', sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.generalNotes || ''
-    ]);
-  });
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:10},{wch:28},{wch:10},{wch:12},{wch:14},{wch:16},{wch:14},{wch:16},
-    {wch:10},{wch:16},{wch:22},{wch:22},{wch:22},{wch:16},
-    {wch:22},...CALENDAR_MONTHS.map(()=>({wch:5})),{wch:22},{wch:22},{wch:14},{wch:12},
-    {wch:8},{wch:12},{wch:12},{wch:18},{wch:20},{wch:36}];
-  // Same header colours as the department's own Summary sheet: the
-  // BAM Candidate/Predicted family (here: the placeholder columns), Habitat
-  // Constraints, Specific Survey Requirements, the survey-months block, SAII
-  // and General Notes.
-  styleHeaderRow(ws, 6, [
-    null, null, null, null,
-    TS_COLORS.bamScreening, TS_COLORS.bamScreening, TS_COLORS.bamScreening, TS_COLORS.bamScreening,
-    null, null,
-    TS_COLORS.habitatOrange, TS_COLORS.habitatOrangeLight, TS_COLORS.habitatOrangeLight, TS_COLORS.surveyReqGreen,
-    TS_COLORS.reasonGreen, ...CALENDAR_MONTHS.map(()=>TS_COLORS.reasonGreen),
-    null, null, null, null,
-    TS_COLORS.saiiGold, null, null, null, null,
-    TS_COLORS.notesBlue
-  ]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
-  XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
-}
-
-// Matches the FULL "Summary" sheet column layout (all 59 columns, same
-// order) from the department's Target List workbook, header colours
-// included, so this can be pasted straight into that sheet. Columns that
-// need Atlas/MNES/survey/BAM-candidate-determination data this live
-// PCT/IBRA query doesn't have (Abreviation, Class, Species Code, Primary
-// Growth Form Group, Consideration Required, Reason for Consideration,
-// Found during Survey, Atlas Counts, MNES, the four BAM Candidate/Predicted
-// columns, Offset Multiplier, the two Foraging/Breeding gain-sensitivity
-// columns, Survey Comments, Occupy Paddock Trees Comment, Geographic
-// Distribution, Level of Biodiversity Concern) are left blank — same
-// caveat as the by-PCT export.
+// Matches the FULL "Summary" sheet column layout (all 59 columns, exact
+// same order and header text) from the department's Target List workbook,
+// used by BOTH exports so the header is identical either way. Columns still
+// left blank need Atlas/MNES/survey/BAM-candidate-determination data this
+// live PCT/IBRA query genuinely doesn't have access to: Abreviation, Class,
+// Found during Survey, both Atlas Count columns, MNES, and the four BAM
+// Candidate/Predicted columns. Everything else is either a direct BioNet
+// field, a join against the SpeciesNames table (Primary Growth Form Group),
+// or computed from data already fetched (Species Code from profileID,
+// Consideration Required / Reason for Consideration from SAII/SAII Breeding
+// only — the other four reasons in the department's own hierarchy need
+// survey/Atlas/MNES data this doesn't have, so it's a partial, honest
+// subset rather than a guess).
 const TS_SUMMARY_COLUMNS = [
   { label:'Abreviation' },
   { label:'Kingdom', field:'kingdom' },
   { label:'Class' },
   { label:'Family', field:'family' },
   { label:'Scientific Name', field:'scientificName' },
-  { label:'Species Code' },
+  { label:'Species Code', compute: sp => sp.profileID != null ? String(sp.profileID) : '' },
   { label:'Common Name', field:'vernacularName' },
-  { label:'Primary Growth Form Group' },
+  { label:'Primary Growth Form Group', field:'primaryGrowthFormGroup' },
   { label:'State Conservation', field:'stateConservation' },
   { label:'Country Conservation', field:'countryConservation' },
-  { label:'Consideration Required' },
-  { label:'Reason for Consideration *', color:'reasonGreen' },
+  { label:'Consideration Required', compute: sp => sp._considerationRequired },
+  { label:'Reason for Consideration *', color:'reasonGreen', compute: sp => sp._reasonForConsideration },
   { label:'Found during Survey', color:'bamScreening' },
   { label:'Atlas Count (Impact)', color:'bamScreening' },
   { label:'Atlas Count (Buffer or IBRA sub)', color:'bamScreening' },
@@ -2904,11 +2868,11 @@ const TS_SUMMARY_COLUMNS = [
   { label:'BAM Predicted (Foraging)', color:'bamScreening' },
   { label:'Class of Credit', field:'classOfCredit' },
   { label:'Unit of Measure', field:'unitOfMeasure' },
-  { label:'Offset Multiplier' },
+  { label:'Offset Multiplier', field:'offsetMultiplier' },
   { label:'Sensitivity to Loss', field:'sensitivityToLoss' },
   { label:'Sensitivity to Potential Gain', field:'sensitivityToPotentialGain' },
-  { label:'Sensitivity to Potential Gain Foraging' },
-  { label:'Sensitivity to Potential Gain Breeding' },
+  { label:'Sensitivity to Potential Gain Foraging', field:'sensitivityToPotentialGainForaging' },
+  { label:'Sensitivity to Potential Gain Breeding', field:'sensitivityToPotentialGainBreeding' },
   { label:'Patch Size', field:'patchSize' },
   { label:'Native Vegetation Cover', field:'nativeVegetationCover' },
   { label:'Associated PCT', field:'associatedPCTs', transform: v => (v || '').replace(/;/g, ', ') },
@@ -2918,42 +2882,113 @@ const TS_SUMMARY_COLUMNS = [
   { label:'Specific Survey Requirements', color:'surveyReqGreen' },
   { label:'Months of Survey', field:'monthsOfSurvey', color:'reasonGreen' },
   ...CALENDAR_MONTHS.map(m => ({ label:m, color:'reasonGreen', month:m })),
-  { label:'Survey Comments', color:'reasonGreen' },
+  { label:'Survey Comments', field:'surveyComments', color:'reasonGreen' },
   { label:'General Notes', field:'generalNotes', color:'notesBlue' },
   { label:'Months of Survey Foraging', field:'monthsOfSurveyForaging' },
   { label:'Months of Survey Breeding', field:'monthsOfSurveyBreeding' },
-  { label:'Occupy Paddock Trees', field:'occupyPaddockTrees' },
-  { label:'Occupy Paddock Trees Comment' },
-  { label:'Geographic Distribution' },
+  { label:'Occupy Paddock Trees', field:'occupyPaddockTrees', valueColored:true },
+  { label:'Occupy Paddock Trees Comment', field:'occupyPaddockTreesComment' },
+  { label:'Geographic Distribution', field:'geographicDistribution' },
   { label:'SAII', field:'SAII', color:'saiiGold' },
   { label:'SAIIBreeding', field:'SAIIBreeding' },
   { label:'SAIIForaging', field:'SAIIForaging' },
-  { label:'Level of Biodiversity Concern' },
+  { label:'Level of Biodiversity Concern', field:'levelOfBiodiversityConcern' },
 ];
 
-function exportThreatenedSpeciesBySpecies(result){
-  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+// Excel's own built-in "Good/Bad/Neutral" cell-style colours for Yes/No/N-A,
+// plus a light blue for "see GN" (see General Notes) — matching the
+// department's own conditional formatting on the Months of Survey block.
+const TS_VALUE_STYLES = {
+  yes:    { fill:{ patternType:'solid', fgColor:{ rgb:'C6EFCE' } }, font:{ color:{ rgb:'006100' } } },
+  no:     { fill:{ patternType:'solid', fgColor:{ rgb:'FFC7CE' } }, font:{ color:{ rgb:'9C0006' } } },
+  'n/a':  { fill:{ patternType:'solid', fgColor:{ rgb:'FFEB9C' } }, font:{ color:{ rgb:'9C6500' } } },
+  'see gn': { fill:{ patternType:'solid', fgColor:{ rgb:'DDEBF7' } }, font:{ color:{ rgb:'1F4E78' } } },
+};
+function styleValueCell(ws, rowIdx, colIdx){
+  const ref = XLSX.utils.encode_cell({ r: rowIdx, c: colIdx });
+  const cell = ws[ref];
+  if(!cell) return;
+  const style = TS_VALUE_STYLES[String(cell.v).trim().toLowerCase()];
+  if(style) cell.s = style;
+}
+
+// Per-species Months-of-Survey cells: no data at all -> "see GN" (matches
+// the department's own template default when a field is blank); the raw
+// field literally being "N/A" -> "N/A" for every month; otherwise "Yes"/"No"
+// per whether that specific month is in the semicolon-separated list.
+function monthCellValues(sp){
+  const raw = (sp.monthsOfSurvey || '').trim();
+  if(!raw) return CALENDAR_MONTHS.map(()=> 'see GN');
+  if(raw.toUpperCase() === 'N/A') return CALENDAR_MONTHS.map(()=> 'N/A');
+  const set = new Set(splitSemicolonList(raw).map(m=>m.toLowerCase()));
+  return CALENDAR_MONTHS.map(m => set.has(m.toLowerCase()) ? 'Yes' : 'No');
+}
+
+function buildThreatenedSpeciesRow(sp){
+  const months = monthCellValues(sp);
+  let monthI = 0;
+  return TS_SUMMARY_COLUMNS.map(c=>{
+    if(c.month) return months[monthI++];
+    if(c.compute) return c.compute(sp) || '';
+    if(!c.field) return '';
+    const v = sp[c.field] || '';
+    return c.transform ? c.transform(v) : v;
+  });
+}
+
+function buildThreatenedSpeciesSheet(matches, title, result){
+  const headerRowIdx = 6;
   const rows = [
-    ['THREATENED SPECIES LIST (BioNet ThreatenedBiodiversity_Species — live query)'],
+    [title],
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: columns needing Atlas/MNES/survey data or BAM candidate/predicted determination are left blank — this is a PCT/IBRA screening list, not a full BAM assessment.'],
+    ['Note: Abreviation, Class, Found during Survey, both Atlas Count columns, MNES and the BAM Candidate/Predicted columns are left blank — those need the department\'s full BAM assessment (Atlas/MNES/survey data), not just PCT/IBRA screening. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
     [],
     TS_SUMMARY_COLUMNS.map(c => c.label)
   ];
-  [...result.matches].sort((a,b)=> a.scientificName.localeCompare(b.scientificName)).forEach(sp=>{
-    const surveyMonths = new Set(splitSemicolonList(sp.monthsOfSurvey).map(m=>m.toLowerCase()));
-    rows.push(TS_SUMMARY_COLUMNS.map(c=>{
-      if(c.month) return surveyMonths.has(c.month.toLowerCase()) ? 'X' : '';
-      if(!c.field) return '';
-      const v = sp[c.field] || '';
-      return c.transform ? c.transform(v) : v;
-    }));
-  });
+  matches.forEach(sp => rows.push(buildThreatenedSpeciesRow(sp)));
+
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = TS_SUMMARY_COLUMNS.map(c => ({ wch: c.month ? 5 : Math.min(34, Math.max(10, c.label.length + 2)) }));
-  styleHeaderRow(ws, 6, TS_SUMMARY_COLUMNS.map(c => c.color ? TS_COLORS[c.color] : null));
+  styleHeaderRow(ws, headerRowIdx, TS_SUMMARY_COLUMNS.map(c => c.color ? TS_COLORS[c.color] : null));
+
+  const monthColIdxs = [];
+  let occupyColIdx = -1;
+  TS_SUMMARY_COLUMNS.forEach((c, i) => {
+    if(c.month) monthColIdxs.push(i);
+    if(c.valueColored) occupyColIdx = i;
+  });
+  matches.forEach((sp, i) => {
+    const rowIdx = headerRowIdx + 1 + i;
+    monthColIdxs.forEach(colIdx => styleValueCell(ws, rowIdx, colIdx));
+    if(occupyColIdx >= 0) styleValueCell(ws, rowIdx, occupyColIdx);
+  });
+
+  return ws;
+}
+
+function exportThreatenedSpeciesByPct(result){
+  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+  // "By PCT": same exact columns as "by species", one row per species (not
+  // exploded per matched PCT — the header has no PCT column of its own to
+  // distinguish duplicate rows), grouped by each species' first matched
+  // site PCT so species sharing a PCT sit together, rather than alphabetical.
+  const sorted = [...result.matches].sort((a,b)=>{
+    const pa = [...a.matchedPcts].sort((x,y)=>x.localeCompare(y, undefined, {numeric:true}))[0];
+    const pb = [...b.matchedPcts].sort((x,y)=>x.localeCompare(y, undefined, {numeric:true}))[0];
+    return pa.localeCompare(pb, undefined, {numeric:true}) || a.scientificName.localeCompare(b.scientificName);
+  });
+  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES BY PCT (BioNet — live query, grouped by matched PCT)', result);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
+  XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+function exportThreatenedSpeciesBySpecies(result){
+  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+  const sorted = [...result.matches].sort((a,b)=> a.scientificName.localeCompare(b.scientificName));
+  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES LIST (BioNet — live query, sorted by species)', result);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By Species');
   XLSX.writeFile(wb, 'threatened-species-list-' + new Date().toISOString().slice(0,10) + '.xlsx');
