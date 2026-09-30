@@ -2645,9 +2645,10 @@ const TS_SPECIES_FIELDS = [
   'scientificName','vernacularName','stateConservation','countryConservation',
   'kingdom','family','classOfCredit','patchSize','nativeVegetationCover',
   'associatedPCTs','habitatConstraints','habitatConstraintsForaging','habitatConstraintsBreeding',
-  'monthsOfSurvey','monthsOfSurveyForaging','monthsOfSurveyBreeding',
+  'monthsOfSurvey','monthsOfSurveyForaging','monthsOfSurveyBreeding','occupyPaddockTrees','unitOfMeasure',
   'sensitivityToLoss','sensitivityToPotentialGain','SAII','SAIIBreeding','SAIIForaging','generalNotes'
 ];
+const CALENDAR_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
 
 // The service is OData v2 (the source workbook's Power Query explicitly
@@ -2671,9 +2672,9 @@ async function fetchBioNetODataAll(entitySet, selectFields){
   return rows;
 }
 
-function normalizePctList(assocPctsStr){
-  if(!assocPctsStr) return [];
-  return String(assocPctsStr).split(';').map(s=>s.trim()).filter(Boolean);
+function splitSemicolonList(str){
+  if(!str) return [];
+  return String(str).split(';').map(s=>s.trim()).filter(Boolean);
 }
 
 // PCTs present on the subject site itself (not the wider assessment area) —
@@ -2736,7 +2737,7 @@ async function fetchThreatenedSpeciesForSite(){
 
     const matches = [];
     speciesRows.forEach(sp=>{
-      const matchedPcts = normalizePctList(sp.associatedPCTs).filter(p => sitePctSet.has(p));
+      const matchedPcts = splitSemicolonList(sp.associatedPCTs).filter(p => sitePctSet.has(p));
       if(!matchedPcts.length) return;
       // Same IBRA-subregion cross-check the department's own manual Excel
       // workflow applies before the PCT filter — excludes species with no
@@ -2775,6 +2776,14 @@ function renderThreatenedSpeciesResult(result){
   document.getElementById('exportTsBySpecies').addEventListener('click', ()=> exportThreatenedSpeciesBySpecies(result));
 }
 
+// Matches the exact "Copy/Paste Data from 'TS by PCT by IBRAsub' PQ" column
+// layout in the department's own Target List workbook (Summary sheet, row
+// 4), so this can be pasted straight into that working sheet. "Matched PCT"
+// is the one column added beyond their spec — otherwise a "by PCT" export
+// wouldn't show which PCT each row matched. Predicted/Candidate Species and
+// Specific Survey Requirements are left blank: those are BAM classifications
+// their own spreadsheet derives from Atlas/MNES/survey inputs this PCT/IBRA
+// screening doesn't have access to.
 function exportThreatenedSpeciesByPct(result){
   if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
   const rows = [
@@ -2782,20 +2791,31 @@ function exportThreatenedSpeciesByPct(result){
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
+    ['Note: Predicted/Candidate Species columns and Specific Survey Requirements are left blank — those need the department\'s full BAM assessment (Atlas/MNES/survey data), not just PCT/IBRA screening.'],
     [],
-    ['PCT ID','Scientific name','Common name','Conservation status (State)','Conservation status (Cwlth)','Class of credit','Survey months','Sensitivity to loss','Sensitivity to gain','SAII']
+    ['Matched PCT','Scientific Name','Kingdom','Class of Credit','Predicted Species','Predicted Species (foraging)','Candidate Species','Candidate Species (breeding)',
+     'Patch Size','Native Vegetation Cover','Habitat Constraints','Habitat Constraints (Foraging)','Habitat Constraints (Breeding)','Specific Survey Requirements',
+     'Months Of Survey', ...CALENDAR_MONTHS, 'Months Of Survey (Foraging)','Months Of Survey (Breeding)','Occupy Paddock Trees','Unit of Measure',
+     'SAII','SAII Breeding','SAII Foraging','Sensitivity To Loss','Sensitivity To Potential Gain','General Notes']
   ];
   const expanded = [];
   result.matches.forEach(sp=> sp.matchedPcts.forEach(pct => expanded.push([pct, sp])));
   expanded.sort((a,b)=> a[0].localeCompare(b[0], undefined, {numeric:true}) || a[1].scientificName.localeCompare(b[1].scientificName));
   expanded.forEach(([pct, sp])=>{
+    const surveyMonths = new Set(splitSemicolonList(sp.monthsOfSurvey).map(m=>m.toLowerCase()));
+    const monthCells = CALENDAR_MONTHS.map(m => surveyMonths.has(m.toLowerCase()) ? 'X' : '');
     rows.push([
-      pct, sp.scientificName, sp.vernacularName || '', sp.stateConservation || '', sp.countryConservation || '',
-      sp.classOfCredit || '', sp.monthsOfSurvey || '', sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.SAII || ''
+      pct, sp.scientificName, sp.kingdom || '', sp.classOfCredit || '', '', '', '', '',
+      sp.patchSize || '', sp.nativeVegetationCover || '', sp.habitatConstraints || '', sp.habitatConstraintsForaging || '', sp.habitatConstraintsBreeding || '', '',
+      sp.monthsOfSurvey || '', ...monthCells, sp.monthsOfSurveyForaging || '', sp.monthsOfSurveyBreeding || '', sp.occupyPaddockTrees || '', sp.unitOfMeasure || '',
+      sp.SAII || '', sp.SAIIBreeding || '', sp.SAIIForaging || '', sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.generalNotes || ''
     ]);
   });
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:9},{wch:30},{wch:24},{wch:16},{wch:16},{wch:12},{wch:26},{wch:20},{wch:20},{wch:8}];
+  ws['!cols'] = [{wch:10},{wch:28},{wch:10},{wch:12},{wch:14},{wch:16},{wch:14},{wch:16},
+    {wch:10},{wch:16},{wch:22},{wch:22},{wch:22},{wch:16},
+    {wch:22},...CALENDAR_MONTHS.map(()=>({wch:5})),{wch:22},{wch:22},{wch:14},{wch:12},
+    {wch:8},{wch:12},{wch:12},{wch:18},{wch:20},{wch:36}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
   XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
