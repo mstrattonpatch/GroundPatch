@@ -814,7 +814,15 @@ document.getElementById('viewQgisScript').addEventListener('click', showQgisScri
 /* =========================================================
    Map setup
 ========================================================= */
-const map = L.map('map', { zoomControl:true }).setView([-33.05, 149.8], 6);
+// preferCanvas: every constraint layer (Land Zoning, SVTM, Mitchell
+// Landscapes, Cadastre, Watercourses, IBRA, ...) is rendered via
+// L.geoJSON as individual vector shapes. Leaflet's default SVG renderer
+// gives each feature its own DOM <path> element, which gets visibly
+// slow to pan/zoom once a few thousand vertex-dense polygons are on the
+// map at once (SVTM's vegetation boundaries in particular). Canvas draws
+// everything onto one bitmap instead — same visuals, dramatically
+// cheaper to redraw on every zoom/pan frame.
+const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([-33.05, 149.8], 6);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19,
   attribution: 'Esri, Maxar, Earthstar Geographics'
@@ -2223,7 +2231,8 @@ function buildSiteContext(){
     // per-species count only, capped to the top 40 by buffer count — the
     // full record-level list (with dates, sources, etc.) is only in the
     // exported Excel. Only records that qualify as threatened under the
-    // NSW BC Act (state status includes E1/E2/E4A/V) are included at all —
+    // NSW BC Act (state status names Endangered/Critically Endangered/
+    // Vulnerable) are included at all —
     // see bcActQualifies() — so excludedNonQualifyingRecords tells the
     // model how many raw Atlas records were filtered out.
     speciesSightings: (window.sightingsResult && window.sightingsResult.records.length) ? {
@@ -3156,7 +3165,7 @@ const SIGHTING_FIELD_CANDIDATES = {
   class: ['class','Class','CLASS','taxonClass'],
   recordDate: ['recordDate','RecordDate','sightingDate','obsDate','eventDate','RECORDDATE'],
   numberOfIndividuals: ['numberOfIndividuals','NumberOfIndividuals','individualCount'],
-  dataSource: ['dataSource','DataSource','source','recordSource'],
+  dataSource: ['dataSource','DataSource','source','recordSource','datasetName'],
   coordinateUncertaintyM: ['coordinateUncertaintyInMeters','coordinateUncertaintyInMetres','CoordinateUncertaintyInMetres','accuracy'],
   conservationStatusState: ['stateConservation','tscStatus','TSCStatus','conservationStatusState'],
   conservationStatusCth: ['countryConservation','epbcStatus','EPBCStatus','conservationStatusCwlth'],
@@ -3170,29 +3179,34 @@ function pickSightingField(props, kind){
 }
 
 // For NSW (BC Act) only, a record counts as threatened if its state
-// conservation status contains at least one of these codes. "P" (Protected)
-// is a general protection status, not a threat category, so it doesn't
-// qualify on its own — "V,P" still qualifies (because of the V), but a bare
-// "P" or a bare numeric code (e.g. "2", "3" — schedule references of
-// unconfirmed meaning) does not.
-const QUALIFYING_BC_ACT_CODES = ['E1','E2','E4A','V'];
-function parseStatusCodes(raw){
-  if(!raw) return [];
-  return String(raw).split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
-}
+// conservation status is Endangered (species or population), Critically
+// Endangered, or Vulnerable. Confirmed against a live response: this
+// service's "stateConservation" field is a full descriptive category
+// ("Endangered Population", "Not Listed", ...), not the short E1/E2/E4A/V
+// schedule codes originally assumed — so this matches on that wording
+// instead ("Critically Endangered" is caught by the same "endangered"
+// substring as plain "Endangered"). "Not Listed" and similar non-threat
+// text don't qualify. Separate general BC Act protection ("P") is its own
+// field on this service ("protectedInNSW", yes/no) rather than combined
+// into this one, so — matching the original rule that protection alone
+// never qualifies a record — it's not consulted here at all.
 function bcActQualifies(rawStateStatus){
-  return parseStatusCodes(rawStateStatus).some(c => QUALIFYING_BC_ACT_CODES.includes(c));
+  if(!rawStateStatus) return false;
+  const s = String(rawStateStatus).toLowerCase();
+  return s.includes('endangered') || s.includes('vulnerable');
 }
 
-// "BC Act: E1,P; EPBC Act: V" style combined status string for display/export
-// — omits the "; EPBC Act: ..." half entirely when there's no Commonwealth
-// status on the record, rather than showing an empty clause.
+// "BC Act: Endangered Population; EPBC Act: Vulnerable" style combined
+// status string for display/export — omits the "; EPBC Act: ..." half
+// when there's no Commonwealth status, or when it's just "Not Listed"
+// (a real value on this service, not an absent one), rather than showing
+// a clause that adds no information.
 function buildLegalStatusString(props){
   const bc = pickSightingField(props, 'conservationStatusState');
   const epbc = pickSightingField(props, 'conservationStatusCth');
   const parts = [];
   if(bc) parts.push('BC Act: ' + bc);
-  if(epbc) parts.push('EPBC Act: ' + epbc);
+  if(epbc && !/^not listed$/i.test(String(epbc).trim())) parts.push('EPBC Act: ' + epbc);
   return parts.join('; ');
 }
 
@@ -3408,7 +3422,7 @@ function renderSpeciesSightingsResult(result){
   }).join('');
   el.innerHTML = `
     <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 4px;line-height:1.5;">
-      ${result.records.length} threatened sighting record(s) (BC Act E1/E2/E4A/V only — ${result.excludedCount} non-qualifying record(s) excluded) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself) — by class: ${breakdown}.
+      ${result.records.length} threatened sighting record(s) (BC Act Endangered/Critically Endangered/Vulnerable only — ${result.excludedCount} non-qualifying record(s) excluded) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself) — by class: ${breakdown}.
       BioNet Atlas generalises/obscures coordinates for some sensitive threatened species records — treat those locations as indicative, not exact.
     </p>
     <div style="margin:6px 0 10px;">${legend}</div>
@@ -3495,7 +3509,7 @@ function exportSpeciesSightings(result){
   const rows = [
     ['THREATENED SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
     ['Generated', new Date().toLocaleString()],
-    [`Note: only records whose NSW (BC Act) status includes E1, E2, E4A or V are included (${result.excludedCount} non-qualifying record(s) excluded — a bare "P" or a bare numeric code alone doesn't qualify). Friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn't match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Class, matching the symbol/colour used on the map.`],
+    [`Note: only records whose NSW (BC Act) state conservation status names Endangered (species or population), Critically Endangered, or Vulnerable are included (${result.excludedCount} non-qualifying record(s) excluded — general BC Act protection alone doesn't qualify). Friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn't match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Class, matching the symbol/colour used on the map.`],
     [],
     headerRow
   ];
@@ -3668,7 +3682,7 @@ async function exportSpeciesSightingsDocx(result){
     }),
     new Paragraph({
       children: [new TextRun({
-        text: `Records within the ${ASSESSMENT_BUFFER_KM}km assessment buffer whose NSW (BC Act) status includes E1, E2, E4A or V, grouped by kingdom and class. "Closest record and date" reports the nearest sighting to the subject site and when it was recorded; "Most recent and proximity" reports the latest sighting and its distance from the site.`,
+        text: `Records within the ${ASSESSMENT_BUFFER_KM}km assessment buffer whose NSW (BC Act) state conservation status names Endangered, Critically Endangered or Vulnerable, grouped by kingdom and class. "Closest record and date" reports the nearest sighting to the subject site and when it was recorded; "Most recent and proximity" reports the latest sighting and its distance from the site.`,
         italics:true, font:DOCX_FONT, size:DOCX_SIZE,
       })],
       spacing: { after: 300 },
