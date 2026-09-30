@@ -693,6 +693,14 @@
       <div id="threatenedSpeciesResult" style="margin-top:8px;"></div>
     </section>
 
+    <section id="speciesSightingsSection" style="display:none;">
+      <h2>Species sightings (BioNet Atlas)</h2>
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against BioNet Atlas's Species Sightings records within the assessment buffer — the same records the department's own Atlas Search finds — fetched fresh every time. Also fills the Atlas Count columns in the threatened species export above, if that's been run this session.</p>
+      <button class="secondary" id="fetchSpeciesSightings">Fetch species sightings</button>
+      <div id="sightingsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
+      <div id="speciesSightingsResult" style="margin-top:8px;"></div>
+    </section>
+
     <section id="figureSection" style="display:none;">
       <h2>Figure export</h2>
       <select id="platePreset" style="width:100%;font-family:inherit;font-size:12px;padding:7px 8px;border:1px solid var(--line);border-radius:2px;background:#fff;margin-bottom:8px;">
@@ -2128,6 +2136,21 @@ function buildSiteContext(){
         occupyPaddockTrees: sp.occupyPaddockTrees || null,
         generalNotes: sp.generalNotes ? (sp.generalNotes.length > 220 ? sp.generalNotes.slice(0,220) + '…' : sp.generalNotes) : null
       }))
+    } : null,
+    // Live BioNet Atlas species sighting records (see "Fetch species
+    // sightings"), if generated this session — null otherwise. Individual
+    // records aren't included here (there can be thousands); this is a
+    // per-species count only, capped to the top 40 by buffer count — the
+    // full record-level list (with dates, sources, etc.) is only in the
+    // exported Excel.
+    speciesSightings: (window.sightingsResult && window.sightingsResult.records.length) ? {
+      totalRecordsInBuffer: window.sightingsResult.records.length,
+      totalRecordsOnSubjectSite: window.sightingsResult.withinSite.length,
+      truncated: !!window.sightingsResult.truncated,
+      topSpeciesByRecordCount: [...window.sightingsResult.countByName.entries()]
+        .sort((a,b)=> b[1].buffer - a[1].buffer)
+        .slice(0, 40)
+        .map(([name, c]) => ({ scientificName: name, recordsInBuffer: c.buffer, recordsOnSubjectSite: c.site }))
     } : null
   };
 }
@@ -2213,6 +2236,13 @@ function renderExportList(){
   document.getElementById('tsFetchStatus').textContent = '';
   document.getElementById('threatenedSpeciesResult').innerHTML = '';
   window.tsResult = null;
+
+  // Same reasoning — a new site means any previously fetched sighting
+  // records are for the wrong buffer and need re-fetching.
+  document.getElementById('speciesSightingsSection').style.display = 'block';
+  document.getElementById('sightingsFetchStatus').textContent = '';
+  document.getElementById('speciesSightingsResult').innerHTML = '';
+  window.sightingsResult = null;
 
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
@@ -2882,8 +2912,8 @@ const TS_SUMMARY_COLUMNS = [
   { label:'Consideration Required', compute: sp => sp._considerationRequired },
   { label:'Reason for Consideration *', color:'reasonGreen', compute: sp => sp._reasonForConsideration },
   { label:'Found during Survey', color:'bamScreening' },
-  { label:'Atlas Count (Impact)', color:'bamScreening' },
-  { label:'Atlas Count (Buffer or IBRA sub)', color:'bamScreening' },
+  { label:'Atlas Count (Impact)', color:'bamScreening', compute: sp => atlasCountFor(sp.scientificName, 'site') },
+  { label:'Atlas Count (Buffer or IBRA sub)', color:'bamScreening', compute: sp => atlasCountFor(sp.scientificName, 'buffer') },
   { label:'MNES (10km Buffer)', color:'bamScreening' },
   { label:'BAM Predicted in IBRA subregion', color:'bamScreening' },
   { label:'BAM Candidate', color:'bamScreening' },
@@ -2967,7 +2997,7 @@ function buildThreatenedSpeciesSheet(matches, title, result){
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: Abreviation, Class, Found during Survey, both Atlas Count columns, MNES and the BAM Candidate/Predicted columns are left blank — those need the department\'s full BAM assessment (Atlas/MNES/survey data), not just PCT/IBRA screening. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
+    ['Note: Abreviation, Class, Found during Survey, MNES and the BAM Candidate/Predicted columns are left blank — those need the department\'s full BAM assessment (MNES/survey data), not just PCT/IBRA screening. Atlas Count columns are populated only if "Fetch species sightings" was also run this session (blank otherwise) and count records by scientific name string match, not a guaranteed BioNet key join. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
     [],
     TS_SUMMARY_COLUMNS.map(c => c.label)
   ];
@@ -3016,6 +3046,162 @@ function exportThreatenedSpeciesBySpecies(result){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By Species');
   XLSX.writeFile(wb, 'threatened-species-list-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+/* =========================================================
+   Species sightings (BioNet Atlas) — the same public records the
+   department's own Atlas Search (atlas.bionet.nsw.gov.au) returns,
+   queried live through the existing ArcGIS query engine rather than
+   a second bespoke fetch path. mapprod3.environment.nsw.gov.au is
+   already allow-listed (Land Zoning/SVTM/Mitchell already use it), so
+   this needs no proxy changes.
+========================================================= */
+const BIONET_SIGHTINGS_URL = 'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/EDP/BionetSpeciesSightings/MapServer';
+const BIONET_SIGHTINGS_LAYER_ID = 0;
+
+// Field names on this service haven't been confirmed against a live response
+// (the Atlas UI itself doesn't expose them) — each kind lists every plausible
+// BioNet spelling and pickSightingField() takes the first that actually has a
+// value. If none match, the export's raw-field columns (every field the
+// service actually returned, appended as-is) still carry the data through.
+const SIGHTING_FIELD_CANDIDATES = {
+  scientificName: ['scientificName','ScientificName','SCIENTIFICNAME','sciName'],
+  commonName: ['vernacularName','commonName','CommonName','VERNACULARNAME'],
+  recordDate: ['recordDate','RecordDate','sightingDate','obsDate','eventDate','RECORDDATE'],
+  numberOfIndividuals: ['numberOfIndividuals','NumberOfIndividuals','individualCount'],
+  dataSource: ['dataSource','DataSource','source','recordSource'],
+  coordinateUncertaintyM: ['coordinateUncertaintyInMeters','coordinateUncertaintyInMetres','CoordinateUncertaintyInMetres','accuracy'],
+  conservationStatusState: ['stateConservation','tscStatus','TSCStatus','conservationStatusState'],
+  conservationStatusCth: ['countryConservation','epbcStatus','EPBCStatus','conservationStatusCwlth'],
+};
+function pickSightingField(props, kind){
+  for(const name of SIGHTING_FIELD_CANDIDATES[kind]){
+    const v = pickField(props, name);
+    if(v !== undefined && v !== null && v !== '') return v;
+  }
+  return null;
+}
+
+function pointWithinPolygon(feature, polygon){
+  try{
+    const g = feature.geometry;
+    if(!g) return false;
+    const coords = g.type === 'MultiPoint' ? g.coordinates[0] : g.coordinates;
+    return turf.booleanPointInPolygon(turf.point(coords), turf.feature(polygon));
+  }catch(e){ return false; }
+}
+
+async function fetchSpeciesSightingsForSite(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const statusEl = document.getElementById('sightingsFetchStatus');
+  const btn = document.getElementById('fetchSpeciesSightings');
+  btn.disabled = true;
+  statusEl.textContent = 'Querying BioNet Atlas…';
+
+  try{
+    const lyr = { name:'BioNet Species Sightings', url: BIONET_SIGHTINGS_URL, id: BIONET_SIGHTINGS_LAYER_ID };
+    const gj = await queryLayer(lyr);
+    const records = gj.features || [];
+    const withinSite = records.filter(f => pointWithinPolygon(f, boundaryGeom));
+    const withinSiteSet = new Set(withinSite);
+
+    const countByName = new Map(); // scientificName -> { buffer: n, site: n }
+    records.forEach(f=>{
+      const name = pickSightingField(f.properties || {}, 'scientificName');
+      if(!name) return;
+      if(!countByName.has(name)) countByName.set(name, { buffer:0, site:0 });
+      const rec = countByName.get(name);
+      rec.buffer++;
+      if(withinSiteSet.has(f)) rec.site++;
+    });
+
+    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, truncated: !!gj.truncated };
+    renderSpeciesSightingsResult(window.sightingsResult);
+    statusEl.innerHTML = `<span class="ok">Found ${records.length} sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself.</span>` +
+      (gj.truncated ? '<br><span class="err">Result truncated at the server\'s record cap — export may be incomplete.</span>' : '');
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('fetchSpeciesSightings').addEventListener('click', fetchSpeciesSightingsForSite);
+
+function renderSpeciesSightingsResult(result){
+  const el = document.getElementById('speciesSightingsResult');
+  el.innerHTML = `
+    <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 10px;line-height:1.5;">
+      ${result.records.length} sighting record(s) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself).
+      BioNet Atlas generalises/obscures coordinates for some sensitive threatened species records — treat those locations as indicative, not exact.
+    </p>
+    <button class="secondary" id="exportSightings" style="width:100%;">Export sighting records (.xlsx)</button>`;
+  document.getElementById('exportSightings').addEventListener('click', ()=> exportSpeciesSightings(result));
+}
+
+// Atlas Count columns in the threatened species export (see TS_SUMMARY_COLUMNS
+// above) — blank until this fetch has run, since there's nothing to count yet.
+function atlasCountFor(scientificName, which){
+  if(!window.sightingsResult) return '';
+  const rec = window.sightingsResult.countByName.get(scientificName);
+  if(!rec) return 0;
+  return which === 'site' ? rec.site : rec.buffer;
+}
+
+// A handful of friendly columns up front (matched defensively — see
+// SIGHTING_FIELD_CANDIDATES), then every raw field the service actually
+// returned, appended as-is in first-seen order, so nothing is lost even if
+// none of the friendly-column guesses match this service's real field names.
+const SIGHTINGS_FRIENDLY_COLUMNS = [
+  { label:'Scientific Name', kind:'scientificName' },
+  { label:'Common Name', kind:'commonName' },
+  { label:'Record Date', kind:'recordDate' },
+  { label:'Number of Individuals', kind:'numberOfIndividuals' },
+  { label:'Data Source', kind:'dataSource' },
+  { label:'Coordinate Uncertainty (m)', kind:'coordinateUncertaintyM' },
+  { label:'State Conservation Status', kind:'conservationStatusState' },
+  { label:'Commonwealth Conservation Status', kind:'conservationStatusCth' },
+];
+
+function exportSpeciesSightings(result){
+  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+
+  const rawFieldNames = [];
+  const seen = new Set();
+  result.records.forEach(f=>{
+    Object.keys(f.properties || {}).forEach(k=>{ if(!seen.has(k)){ seen.add(k); rawFieldNames.push(k); } });
+  });
+
+  const headerRow = ['Within subject site', ...SIGHTINGS_FRIENDLY_COLUMNS.map(c=>c.label), 'Longitude', 'Latitude', ...rawFieldNames];
+  const rows = [
+    ['SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
+    ['Generated', new Date().toLocaleString()],
+    ['Note: the friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn\'t match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact.'],
+    [],
+    headerRow
+  ];
+  const headerRowIdx = rows.length - 1;
+
+  result.records.forEach(f=>{
+    const props = f.properties || {};
+    const withinSite = result.withinSiteSet.has(f) ? 'Yes' : 'No';
+    let lon = '', lat = '';
+    if(f.geometry){
+      const coords = f.geometry.type === 'MultiPoint' ? f.geometry.coordinates[0] : f.geometry.coordinates;
+      if(Array.isArray(coords)){ lon = coords[0]; lat = coords[1]; }
+    }
+    const friendlyVals = SIGHTINGS_FRIENDLY_COLUMNS.map(c => pickSightingField(props, c.kind) || '');
+    const rawVals = rawFieldNames.map(k => props[k] != null ? props[k] : '');
+    rows.push([withinSite, ...friendlyVals, lon, lat, ...rawVals]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = headerRow.map(h => ({ wch: Math.min(34, Math.max(10, String(h).length + 2)) }));
+  styleHeaderRow(ws, headerRowIdx, headerRow.map(()=> null));
+  result.records.forEach((f,i)=> styleValueCell(ws, headerRowIdx + 1 + i, 0));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sightings');
+  XLSX.writeFile(wb, 'species-sightings-' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
 // One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
