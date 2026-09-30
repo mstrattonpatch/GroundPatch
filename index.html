@@ -9,7 +9,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- xlsx-js-style: drop-in-compatible fork of SheetJS (same XLSX global, same
+     XLSX.utils/writeFile API) that adds real cell-style support (fill colors,
+     bold headers etc.) — the plain community xlsx.full.min.js silently
+     ignores cell.s style info entirely, so it can't produce the colour-coded
+     sheets the threatened species exports need. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
 <style>
   :root{
@@ -2649,6 +2654,35 @@ const TS_SPECIES_FIELDS = [
   'sensitivityToLoss','sensitivityToPotentialGain','SAII','SAIIBreeding','SAIIForaging','generalNotes'
 ];
 const CALENDAR_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+// Colours lifted directly from the department's own Target List workbook
+// (Summary sheet, header row) — decoded from its theme XML (Office theme:
+// accent1 5B9BD5, accent2 ED7D31, accent4 FFC000, accent6 70AD47) with each
+// header cell's tint applied, so these match the exact swatches Excel shows
+// as e.g. "Green, Accent 6, Lighter 80%" in that sheet.
+const TS_COLORS = {
+  bamScreening: 'FFC000',  // "BAM Candidate/Predicted" family — needs full BAM assessment, not just PCT/IBRA
+  reasonGreen: 'E2EFDA',   // "Reason for Consideration", "Months of Survey" block, "Survey Comments"
+  habitatOrange: 'F8CBAD', // "Habitat Constraints"
+  habitatOrangeLight: 'FBE5D6', // "Habitat Constraints (Foraging/Breeding)"
+  surveyReqGreen: '92D050', // "Specific Survey Requirements"
+  notesBlue: 'BDD7EE',      // "General Notes"
+  saiiGold: 'FFF2CC',       // "SAII"
+};
+
+function fillCell(hex){
+  return { fill: { patternType: 'solid', fgColor: { rgb: hex } }, font: { bold: true } };
+}
+
+// Applies a fill (or just bold, for headers with no assigned colour) to every
+// cell in a header row. colorByCol is a parallel array of hex strings or null.
+function styleHeaderRow(ws, rowIndex, colorByCol){
+  colorByCol.forEach((hex, colIdx)=>{
+    const ref = XLSX.utils.encode_cell({ r: rowIndex, c: colIdx });
+    if(!ws[ref]) return;
+    ws[ref].s = hex ? fillCell(hex) : { font: { bold: true } };
+  });
+}
 const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
 
 // The service is OData v2 (the source workbook's Power Query explicitly
@@ -2816,10 +2850,86 @@ function exportThreatenedSpeciesByPct(result){
     {wch:10},{wch:16},{wch:22},{wch:22},{wch:22},{wch:16},
     {wch:22},...CALENDAR_MONTHS.map(()=>({wch:5})),{wch:22},{wch:22},{wch:14},{wch:12},
     {wch:8},{wch:12},{wch:12},{wch:18},{wch:20},{wch:36}];
+  // Same header colours as the department's own Summary sheet: the
+  // BAM Candidate/Predicted family (here: the placeholder columns), Habitat
+  // Constraints, Specific Survey Requirements, the survey-months block, SAII
+  // and General Notes.
+  styleHeaderRow(ws, 6, [
+    null, null, null, null,
+    TS_COLORS.bamScreening, TS_COLORS.bamScreening, TS_COLORS.bamScreening, TS_COLORS.bamScreening,
+    null, null,
+    TS_COLORS.habitatOrange, TS_COLORS.habitatOrangeLight, TS_COLORS.habitatOrangeLight, TS_COLORS.surveyReqGreen,
+    TS_COLORS.reasonGreen, ...CALENDAR_MONTHS.map(()=>TS_COLORS.reasonGreen),
+    null, null, null, null,
+    TS_COLORS.saiiGold, null, null, null, null,
+    TS_COLORS.notesBlue
+  ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
   XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
+
+// Matches the FULL "Summary" sheet column layout (all 59 columns, same
+// order) from the department's Target List workbook, header colours
+// included, so this can be pasted straight into that sheet. Columns that
+// need Atlas/MNES/survey/BAM-candidate-determination data this live
+// PCT/IBRA query doesn't have (Abreviation, Class, Species Code, Primary
+// Growth Form Group, Consideration Required, Reason for Consideration,
+// Found during Survey, Atlas Counts, MNES, the four BAM Candidate/Predicted
+// columns, Offset Multiplier, the two Foraging/Breeding gain-sensitivity
+// columns, Survey Comments, Occupy Paddock Trees Comment, Geographic
+// Distribution, Level of Biodiversity Concern) are left blank — same
+// caveat as the by-PCT export.
+const TS_SUMMARY_COLUMNS = [
+  { label:'Abreviation' },
+  { label:'Kingdom', field:'kingdom' },
+  { label:'Class' },
+  { label:'Family', field:'family' },
+  { label:'Scientific Name', field:'scientificName' },
+  { label:'Species Code' },
+  { label:'Common Name', field:'vernacularName' },
+  { label:'Primary Growth Form Group' },
+  { label:'State Conservation', field:'stateConservation' },
+  { label:'Country Conservation', field:'countryConservation' },
+  { label:'Consideration Required' },
+  { label:'Reason for Consideration *', color:'reasonGreen' },
+  { label:'Found during Survey', color:'bamScreening' },
+  { label:'Atlas Count (Impact)', color:'bamScreening' },
+  { label:'Atlas Count (Buffer or IBRA sub)', color:'bamScreening' },
+  { label:'MNES (10km Buffer)', color:'bamScreening' },
+  { label:'BAM Predicted in IBRA subregion', color:'bamScreening' },
+  { label:'BAM Candidate', color:'bamScreening' },
+  { label:'BAM Candidate (Breeding)', color:'bamScreening' },
+  { label:'BAM Predicted', color:'bamScreening' },
+  { label:'BAM Predicted (Foraging)', color:'bamScreening' },
+  { label:'Class of Credit', field:'classOfCredit' },
+  { label:'Unit of Measure', field:'unitOfMeasure' },
+  { label:'Offset Multiplier' },
+  { label:'Sensitivity to Loss', field:'sensitivityToLoss' },
+  { label:'Sensitivity to Potential Gain', field:'sensitivityToPotentialGain' },
+  { label:'Sensitivity to Potential Gain Foraging' },
+  { label:'Sensitivity to Potential Gain Breeding' },
+  { label:'Patch Size', field:'patchSize' },
+  { label:'Native Vegetation Cover', field:'nativeVegetationCover' },
+  { label:'Associated PCT', field:'associatedPCTs', transform: v => (v || '').replace(/;/g, ', ') },
+  { label:'Habitat Constraints', field:'habitatConstraints', color:'habitatOrange' },
+  { label:'Habitat Constraints Foraging', field:'habitatConstraintsForaging', color:'habitatOrangeLight' },
+  { label:'Habitat Constraints Breeding', field:'habitatConstraintsBreeding', color:'habitatOrangeLight' },
+  { label:'Specific Survey Requirements', color:'surveyReqGreen' },
+  { label:'Months of Survey', field:'monthsOfSurvey', color:'reasonGreen' },
+  ...CALENDAR_MONTHS.map(m => ({ label:m, color:'reasonGreen', month:m })),
+  { label:'Survey Comments', color:'reasonGreen' },
+  { label:'General Notes', field:'generalNotes', color:'notesBlue' },
+  { label:'Months of Survey Foraging', field:'monthsOfSurveyForaging' },
+  { label:'Months of Survey Breeding', field:'monthsOfSurveyBreeding' },
+  { label:'Occupy Paddock Trees', field:'occupyPaddockTrees' },
+  { label:'Occupy Paddock Trees Comment' },
+  { label:'Geographic Distribution' },
+  { label:'SAII', field:'SAII', color:'saiiGold' },
+  { label:'SAIIBreeding', field:'SAIIBreeding' },
+  { label:'SAIIForaging', field:'SAIIForaging' },
+  { label:'Level of Biodiversity Concern' },
+];
 
 function exportThreatenedSpeciesBySpecies(result){
   if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
@@ -2828,19 +2938,22 @@ function exportThreatenedSpeciesBySpecies(result){
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
+    ['Note: columns needing Atlas/MNES/survey data or BAM candidate/predicted determination are left blank — this is a PCT/IBRA screening list, not a full BAM assessment.'],
     [],
-    ['Scientific name','Common name','Conservation status (State)','Conservation status (Cwlth)','Matched PCTs on site','All associated PCTs','Class of credit','Habitat constraints','Survey months','Sensitivity to loss','Sensitivity to gain','SAII','SAII Breeding','SAII Foraging','General notes']
+    TS_SUMMARY_COLUMNS.map(c => c.label)
   ];
   [...result.matches].sort((a,b)=> a.scientificName.localeCompare(b.scientificName)).forEach(sp=>{
-    rows.push([
-      sp.scientificName, sp.vernacularName || '', sp.stateConservation || '', sp.countryConservation || '',
-      sp.matchedPcts.join(', '), (sp.associatedPCTs || '').replace(/;/g, ', '),
-      sp.classOfCredit || '', sp.habitatConstraints || '', sp.monthsOfSurvey || '',
-      sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.SAII || '', sp.SAIIBreeding || '', sp.SAIIForaging || '', sp.generalNotes || ''
-    ]);
+    const surveyMonths = new Set(splitSemicolonList(sp.monthsOfSurvey).map(m=>m.toLowerCase()));
+    rows.push(TS_SUMMARY_COLUMNS.map(c=>{
+      if(c.month) return surveyMonths.has(c.month.toLowerCase()) ? 'X' : '';
+      if(!c.field) return '';
+      const v = sp[c.field] || '';
+      return c.transform ? c.transform(v) : v;
+    }));
   });
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:28},{wch:22},{wch:16},{wch:16},{wch:16},{wch:20},{wch:12},{wch:30},{wch:26},{wch:20},{wch:20},{wch:8},{wch:12},{wch:12},{wch:40}];
+  ws['!cols'] = TS_SUMMARY_COLUMNS.map(c => ({ wch: c.month ? 5 : Math.min(34, Math.max(10, c.label.length + 2)) }));
+  styleHeaderRow(ws, 6, TS_SUMMARY_COLUMNS.map(c => c.color ? TS_COLORS[c.color] : null));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By Species');
   XLSX.writeFile(wb, 'threatened-species-list-' + new Date().toISOString().slice(0,10) + '.xlsx');
