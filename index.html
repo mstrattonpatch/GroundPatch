@@ -680,6 +680,14 @@
       <div id="bioConstraintsResult" style="margin-top:10px;"></div>
     </section>
 
+    <section id="threatenedSpeciesSection" style="display:none;">
+      <h2>Threatened species (BioNet)</h2>
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against BioNet's ThreatenedBiodiversity_Species dataset, cross-referenced against the PCTs (and IBRA subregion) found on the subject site — fetched fresh every time, never bundled or cached data.</p>
+      <button class="secondary" id="fetchThreatenedSpecies">Fetch threatened species list</button>
+      <div id="tsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
+      <div id="threatenedSpeciesResult" style="margin-top:8px;"></div>
+    </section>
+
     <section id="figureSection" style="display:none;">
       <h2>Figure export</h2>
       <select id="platePreset" style="width:100%;font-family:inherit;font-size:12px;padding:7px 8px;border:1px solid var(--line);border-radius:2px;background:#fff;margin-bottom:8px;">
@@ -822,7 +830,7 @@ function bufferGeomFor(lyr){ return lyr.bufferKm === CONTEXT_BUFFER_KM ? context
    where CORS doesn't apply at all.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'mapprod3.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee'];
+const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'mapprod3.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee', 'data.bionet.nsw.gov.au'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
   catch(e){ return false; }
@@ -2170,6 +2178,13 @@ function renderExportList(){
   bcUploadedFeatures = { High: [], Medium: [], Low: [] };
   bcUploadedFileNames = { High: null, Medium: null, Low: null };
 
+  // New site data means the PCTs on site may have changed — any previously
+  // fetched threatened species result is stale.
+  document.getElementById('threatenedSpeciesSection').style.display = 'block';
+  document.getElementById('tsFetchStatus').textContent = '';
+  document.getElementById('threatenedSpeciesResult').innerHTML = '';
+  window.tsResult = null;
+
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
   boundaryRow.innerHTML = `<span class="name">Site boundary</span>
@@ -2613,6 +2628,202 @@ function exportBioConstraintsXlsx(){
   });
 
   XLSX.writeFile(wb, 'biodiversity-constraints-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+/* =========================================================
+   Threatened species (BioNet) — live query against the same public
+   OData feed the department's own "Threatened Species by PCT" Power
+   Query workbook uses (https://data.bionet.nsw.gov.au/biosvcapp/odata,
+   tables ThreatenedBiodiversity_Species and
+   ThreatenedBiodiversity_TSGeographicData — extracted directly from
+   that workbook's embedded Power Query M code). Fetched fresh on every
+   click, never bundled/cached data, so it's always current with
+   whatever BioNet currently holds.
+========================================================= */
+const BIONET_ODATA_BASE = 'https://data.bionet.nsw.gov.au/biosvcapp/odata';
+const TS_SPECIES_FIELDS = [
+  'scientificName','vernacularName','stateConservation','countryConservation',
+  'kingdom','family','classOfCredit','patchSize','nativeVegetationCover',
+  'associatedPCTs','habitatConstraints','habitatConstraintsForaging','habitatConstraintsBreeding',
+  'monthsOfSurvey','monthsOfSurveyForaging','monthsOfSurveyBreeding',
+  'sensitivityToLoss','sensitivityToPotentialGain','SAII','SAIIBreeding','SAIIForaging','generalNotes'
+];
+const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
+
+// The service is OData v2 (the source workbook's Power Query explicitly
+// requests Implementation="2.0"), which paginates server-side regardless of
+// what's asked for and returns either {d:{results,__next}} (verbose) or
+// {value, "@odata.nextLink"} depending on how it's configured — handle
+// both shapes and follow pagination until exhausted.
+async function fetchBioNetODataAll(entitySet, selectFields){
+  let url = `${BIONET_ODATA_BASE}/${entitySet}?$select=${selectFields.join(',')}&$format=json`;
+  const rows = [];
+  let guard = 0;
+  while(url && guard < 50){
+    guard++;
+    const resp = await fetch(withProxy(url));
+    if(!resp.ok) throw new Error(`BioNet ${entitySet} query failed: HTTP ${resp.status}`);
+    const json = await resp.json();
+    const batch = json.value || (json.d && json.d.results) || [];
+    rows.push(...batch);
+    url = json['@odata.nextLink'] || json['odata.nextLink'] || (json.d && json.d.__next) || null;
+  }
+  return rows;
+}
+
+function normalizePctList(assocPctsStr){
+  if(!assocPctsStr) return [];
+  return String(assocPctsStr).split(';').map(s=>s.trim()).filter(Boolean);
+}
+
+// PCTs present on the subject site itself (not the wider assessment area) —
+// matches the client's original ask of "species associated with the PCTs
+// on a site", and the same subject-site-clipped convention buildSiteContext()
+// already uses elsewhere.
+function getSitePctIds(){
+  const svtmLyr = layers.find(l => l.name === 'SVTM (Extant PCT)');
+  if(!svtmLyr || !svtmLyr.lastGeoJSON || !boundaryGeom) return [];
+  let clipped;
+  try{ clipped = clipFeatureCollection(svtmLyr.lastGeoJSON, boundaryGeom); }catch(e){ return []; }
+  const ids = new Set();
+  clipped.features.forEach(f=>{
+    const id = f.properties && (f.properties.PCTID ?? f.properties.PCT_ID);
+    if(id !== undefined && id !== null && String(id) !== '0') ids.add(String(id));
+  });
+  return [...ids];
+}
+
+function getSiteIbraSubregions(){
+  const ibraLyr = layers.find(l => l.name === 'IBRA Subregions');
+  if(!ibraLyr || !ibraLyr.lastGeoJSON) return [];
+  const names = new Set();
+  ibraLyr.lastGeoJSON.features.forEach(f=>{
+    const name = f.properties && (f.properties.SUB_NAME_7 || f.properties.SUBNAME);
+    if(name) names.add(name);
+  });
+  return [...names];
+}
+
+async function fetchThreatenedSpeciesForSite(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const sitePcts = getSitePctIds();
+  if(!sitePcts.length){
+    alert('No PCTs found on the subject site yet — run "Fetch site data" first (SVTM (Extant PCT) needs to have returned features intersecting the subject site boundary).');
+    return;
+  }
+  const siteIbra = getSiteIbraSubregions();
+
+  const statusEl = document.getElementById('tsFetchStatus');
+  const btn = document.getElementById('fetchThreatenedSpecies');
+  btn.disabled = true;
+  statusEl.textContent = 'Querying BioNet…';
+
+  try{
+    const [speciesRows, geoRows] = await Promise.all([
+      fetchBioNetODataAll('ThreatenedBiodiversity_Species', TS_SPECIES_FIELDS),
+      fetchBioNetODataAll('ThreatenedBiodiversity_TSGeographicData', TS_GEO_FIELDS)
+    ]);
+
+    const geoByName = new Map(); // scientificName -> Set(IBRA subregions documented for it)
+    geoRows.forEach(r=>{
+      if(!r.scientificName || !r.IBRASubregion) return;
+      if(!geoByName.has(r.scientificName)) geoByName.set(r.scientificName, new Set());
+      geoByName.get(r.scientificName).add(r.IBRASubregion);
+    });
+
+    const sitePctSet = new Set(sitePcts);
+    const siteIbraSet = new Set(siteIbra);
+
+    const matches = [];
+    speciesRows.forEach(sp=>{
+      const matchedPcts = normalizePctList(sp.associatedPCTs).filter(p => sitePctSet.has(p));
+      if(!matchedPcts.length) return;
+      // Same IBRA-subregion cross-check the department's own manual Excel
+      // workflow applies before the PCT filter — excludes species with no
+      // documented occurrence at all in this site's IBRA subregion(s).
+      if(siteIbraSet.size){
+        const ibraForSpecies = geoByName.get(sp.scientificName);
+        const ibraMatch = ibraForSpecies && [...siteIbraSet].some(i => ibraForSpecies.has(i));
+        if(!ibraMatch) return;
+      }
+      matches.push(Object.assign({}, sp, { matchedPcts }));
+    });
+
+    window.tsResult = { matches, sitePcts, siteIbra };
+    renderThreatenedSpeciesResult(window.tsResult);
+    statusEl.innerHTML = `<span class="ok">Found ${matches.length} threatened species associated with ${sitePcts.length} PCT(s) on the subject site.</span>`;
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('fetchThreatenedSpecies').addEventListener('click', fetchThreatenedSpeciesForSite);
+
+function renderThreatenedSpeciesResult(result){
+  const el = document.getElementById('threatenedSpeciesResult');
+  el.innerHTML = `
+    <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 10px;line-height:1.5;">
+      ${result.matches.length} species associated with PCT(s) ${result.sitePcts.join(', ')} on the subject site${result.siteIbra.length ? ', within IBRA subregion(s) ' + result.siteIbra.join(', ') : ''}.
+      This is a PCT/IBRA screening candidate list only — habitat constraints, native vegetation cover and patch size (BAM 2020 s.5.2.2) still need manual review.
+    </p>
+    <div style="display:flex;gap:6px;">
+      <button class="secondary" id="exportTsByPct" style="flex:1;">Export by PCT (.xlsx)</button>
+      <button class="secondary" id="exportTsBySpecies" style="flex:1;">Export by species (.xlsx)</button>
+    </div>`;
+  document.getElementById('exportTsByPct').addEventListener('click', ()=> exportThreatenedSpeciesByPct(result));
+  document.getElementById('exportTsBySpecies').addEventListener('click', ()=> exportThreatenedSpeciesBySpecies(result));
+}
+
+function exportThreatenedSpeciesByPct(result){
+  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+  const rows = [
+    ['THREATENED SPECIES BY PCT (BioNet ThreatenedBiodiversity_Species — live query)'],
+    ['Generated', new Date().toLocaleString()],
+    ['Subject site PCTs', result.sitePcts.join(', ')],
+    ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
+    [],
+    ['PCT ID','Scientific name','Common name','Conservation status (State)','Conservation status (Cwlth)','Class of credit','Survey months','Sensitivity to loss','Sensitivity to gain','SAII']
+  ];
+  const expanded = [];
+  result.matches.forEach(sp=> sp.matchedPcts.forEach(pct => expanded.push([pct, sp])));
+  expanded.sort((a,b)=> a[0].localeCompare(b[0], undefined, {numeric:true}) || a[1].scientificName.localeCompare(b[1].scientificName));
+  expanded.forEach(([pct, sp])=>{
+    rows.push([
+      pct, sp.scientificName, sp.vernacularName || '', sp.stateConservation || '', sp.countryConservation || '',
+      sp.classOfCredit || '', sp.monthsOfSurvey || '', sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.SAII || ''
+    ]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:9},{wch:30},{wch:24},{wch:16},{wch:16},{wch:12},{wch:26},{wch:20},{wch:20},{wch:8}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
+  XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+function exportThreatenedSpeciesBySpecies(result){
+  if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
+  const rows = [
+    ['THREATENED SPECIES LIST (BioNet ThreatenedBiodiversity_Species — live query)'],
+    ['Generated', new Date().toLocaleString()],
+    ['Subject site PCTs', result.sitePcts.join(', ')],
+    ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
+    [],
+    ['Scientific name','Common name','Conservation status (State)','Conservation status (Cwlth)','Matched PCTs on site','All associated PCTs','Class of credit','Habitat constraints','Survey months','Sensitivity to loss','Sensitivity to gain','SAII','SAII Breeding','SAII Foraging','General notes']
+  ];
+  [...result.matches].sort((a,b)=> a.scientificName.localeCompare(b.scientificName)).forEach(sp=>{
+    rows.push([
+      sp.scientificName, sp.vernacularName || '', sp.stateConservation || '', sp.countryConservation || '',
+      sp.matchedPcts.join(', '), (sp.associatedPCTs || '').replace(/;/g, ', '),
+      sp.classOfCredit || '', sp.habitatConstraints || '', sp.monthsOfSurvey || '',
+      sp.sensitivityToLoss || '', sp.sensitivityToPotentialGain || '', sp.SAII || '', sp.SAIIBreeding || '', sp.SAIIForaging || '', sp.generalNotes || ''
+    ]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:28},{wch:22},{wch:16},{wch:16},{wch:16},{wch:20},{wch:12},{wch:30},{wch:26},{wch:20},{wch:20},{wch:8},{wch:12},{wch:12},{wch:40}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'By Species');
+  XLSX.writeFile(wb, 'threatened-species-list-' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
 // One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
