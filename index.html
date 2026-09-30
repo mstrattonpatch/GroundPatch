@@ -1491,8 +1491,23 @@ function dissolveByField(gj, field){
 /* =========================================================
    Query a single ArcGIS layer, intersecting the boundary
 ========================================================= */
+// Every layer is now queried concurrently with every other layer (see
+// runAll()), so a single retry here only costs that one layer's own time,
+// not the whole "Fetch site data" run — worth it to ride out a transient
+// blip on a government server rather than forcing the user to click the
+// button again for one layer out of nine.
 async function queryLayer(lyr){
   if(lyr.osm) return queryOsmRoads(lyr);
+  try{
+    return await attemptQueryLayer(lyr);
+  }catch(err){
+    console.warn(`${lyr.name}: first attempt failed, retrying once after a short pause.`, err);
+    await new Promise(r => setTimeout(r, 1500));
+    return await attemptQueryLayer(lyr);
+  }
+}
+
+async function attemptQueryLayer(lyr){
   try{
     return await queryLayerByIds(lyr);
   }catch(err){
@@ -1803,11 +1818,24 @@ async function runAll(){
   reportLines.push(`Buffers: ${ASSESSMENT_BUFFER_KM}km rounded (ecology/planning layers), ${CONTEXT_BUFFER_KM*1000}m rounded (cadastre, context only) — all layers queried and clipped to their respective extent`);
   reportLines.push('');
 
-  for(const lyr of active){
+  // Every layer is an independent request to (usually) a different government
+  // service, so there's no reason to make one wait for the previous one to
+  // finish — querying them all concurrently turns total wait time from the
+  // SUM of every layer's response time into the time of the SLOWEST one.
+  // Cards are created up front, in the same order as `active`, so the layout
+  // stays stable regardless of which query actually finishes first; each
+  // card is then filled in by processLayer() once its own query settles.
+  const cards = active.map(lyr=>{
     const card = document.createElement('div');
     card.className = 'result-card';
+    card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge" style="margin-left:auto;">querying…</span></div>`;
     resultsEl.appendChild(card);
+    return card;
+  });
+  const layerReportLines = await Promise.all(active.map((lyr, i) => processLayer(lyr, cards[i])));
+  reportLines.push(...layerReportLines);
 
+  async function processLayer(lyr, card){
     try{
       const rawGj = await queryLayer(lyr);
       let gj = clipFeatureCollection(rawGj, bufferGeomFor(lyr));
@@ -1825,14 +1853,13 @@ async function runAll(){
           card.classList.add('empty');
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">not present</span></div>
                              <div class="rc-body">Does not intersect the ${ASSESSMENT_BUFFER_KM}km buffer — omitted as a conditional layer (map plate not required).</div>`;
-          reportLines.push(`${lyr.name}: not present in buffer — omitted (conditional layer)`);
+          return `${lyr.name}: not present in buffer — omitted (conditional layer)`;
         } else {
           card.classList.add('empty');
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">no intersect</span></div>
                              <div class="rc-body">No features of this layer intersect the ${ASSESSMENT_BUFFER_KM}km buffer.</div>`;
-          reportLines.push(`${lyr.name}: no intersecting features`);
+          return `${lyr.name}: no intersecting features`;
         }
-        continue;
       }
       if(lyr.conditional) lyr.on = true;
       lyr.visible = true;
@@ -1905,13 +1932,13 @@ async function runAll(){
       });
 
       const uniqueVals = [...new Set(attrSummary)].slice(0,6).join('; ');
-      reportLines.push(`${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?' [UNPAGINATED FALLBACK — may be capped]':''} — ${uniqueVals || 'see attributes'}`);
+      return `${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?' [UNPAGINATED FALLBACK — may be capped]':''} — ${uniqueVals || 'see attributes'}`;
 
     }catch(err){
       card.classList.add('error');
       card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge err" style="margin-left:auto;">error</span></div>
                          <div class="rc-body">Could not reach this layer (${err.message}). This is usually a CORS or network restriction on the endpoint, not a problem with the boundary.</div>`;
-      reportLines.push(`${lyr.name}: could not be queried (${err.message})`);
+      return `${lyr.name}: could not be queried (${err.message})`;
     }
   }
 
@@ -2147,6 +2174,7 @@ function buildSiteContext(){
       totalRecordsInBuffer: window.sightingsResult.records.length,
       totalRecordsOnSubjectSite: window.sightingsResult.withinSite.length,
       truncated: !!window.sightingsResult.truncated,
+      recordCountByKingdom: Object.fromEntries(window.sightingsResult.countByKingdom),
       topSpeciesByRecordCount: [...window.sightingsResult.countByName.entries()]
         .sort((a,b)=> b[1].buffer - a[1].buffer)
         .slice(0, 40)
@@ -3067,6 +3095,7 @@ const BIONET_SIGHTINGS_LAYER_ID = 0;
 const SIGHTING_FIELD_CANDIDATES = {
   scientificName: ['scientificName','ScientificName','SCIENTIFICNAME','sciName'],
   commonName: ['vernacularName','commonName','CommonName','VERNACULARNAME'],
+  kingdom: ['kingdom','Kingdom','KINGDOM','taxonKingdom'],
   recordDate: ['recordDate','RecordDate','sightingDate','obsDate','eventDate','RECORDDATE'],
   numberOfIndividuals: ['numberOfIndividuals','NumberOfIndividuals','individualCount'],
   dataSource: ['dataSource','DataSource','source','recordSource'],
@@ -3080,6 +3109,58 @@ function pickSightingField(props, kind){
     if(v !== undefined && v !== null && v !== '') return v;
   }
   return null;
+}
+
+// Distinct colour AND shape per kingdom — told apart by silhouette, not just
+// colour, once markers are small/overlapping or for colourblind-safe reading.
+// Unrecognised/missing kingdom values fall back to a plain grey circle rather
+// than being dropped, so nothing goes unplotted just because a value doesn't
+// match this list.
+const KINGDOM_SYMBOLS = {
+  Animalia:  { shape:'circle',   color:'#C1440E' },
+  Plantae:   { shape:'triangle', color:'#2E7D32' },
+  Fungi:     { shape:'square',   color:'#7B4EA3' },
+  Chromista: { shape:'diamond',  color:'#1976D2' },
+  Protista:  { shape:'diamond',  color:'#1976D2' },
+  Bacteria:  { shape:'diamond',  color:'#1976D2' },
+};
+const KINGDOM_FALLBACK_SYMBOL = { shape:'circle', color:'#666666' };
+function kingdomSymbolFor(kingdom){ return KINGDOM_SYMBOLS[kingdom] || KINGDOM_FALLBACK_SYMBOL; }
+
+function shapeDivIcon(shape, color){
+  const size = 14;
+  let inner;
+  if(shape === 'triangle'){
+    inner = `width:0;height:0;border-left:${size/2}px solid transparent;border-right:${size/2}px solid transparent;border-bottom:${size}px solid ${color};filter:drop-shadow(0 0 1px rgba(0,0,0,0.7));`;
+  } else if(shape === 'square'){
+    inner = `width:${size}px;height:${size}px;background:${color};border:1px solid #fff;box-shadow:0 0 2px rgba(0,0,0,0.7);`;
+  } else if(shape === 'diamond'){
+    inner = `width:${size*0.8}px;height:${size*0.8}px;background:${color};border:1px solid #fff;transform:rotate(45deg);box-shadow:0 0 2px rgba(0,0,0,0.7);`;
+  } else {
+    inner = `width:${size}px;height:${size}px;background:${color};border:1px solid #fff;border-radius:50%;box-shadow:0 0 2px rgba(0,0,0,0.7);`;
+  }
+  return L.divIcon({ className:'sighting-marker', html:`<div style="${inner}"></div>`, iconSize:[size,size], iconAnchor:[size/2,size/2] });
+}
+
+let sightingsMapLayerGroup = null;
+
+function renderSightingsOnMap(records){
+  if(sightingsMapLayerGroup){ map.removeLayer(sightingsMapLayerGroup); sightingsMapLayerGroup = null; }
+  const markers = records.map(f=>{
+    if(!f.geometry) return null;
+    const coords = f.geometry.type === 'MultiPoint' ? f.geometry.coordinates[0] : f.geometry.coordinates;
+    if(!Array.isArray(coords)) return null;
+    const props = f.properties || {};
+    const kingdom = pickSightingField(props, 'kingdom') || 'Unknown';
+    const sym = kingdomSymbolFor(kingdom);
+    const marker = L.marker([coords[1], coords[0]], { icon: shapeDivIcon(sym.shape, sym.color) });
+    const name = pickSightingField(props, 'scientificName') || '(unknown species)';
+    const common = pickSightingField(props, 'commonName');
+    const date = pickSightingField(props, 'recordDate');
+    marker.bindPopup(`<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Kingdom</b>: ${kingdom}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}</div>`);
+    return marker;
+  }).filter(Boolean);
+  sightingsMapLayerGroup = L.layerGroup(markers).addTo(map);
 }
 
 function pointWithinPolygon(feature, polygon){
@@ -3106,16 +3187,22 @@ async function fetchSpeciesSightingsForSite(){
     const withinSiteSet = new Set(withinSite);
 
     const countByName = new Map(); // scientificName -> { buffer: n, site: n }
+    const countByKingdom = new Map(); // kingdom -> record count in buffer
     records.forEach(f=>{
-      const name = pickSightingField(f.properties || {}, 'scientificName');
-      if(!name) return;
-      if(!countByName.has(name)) countByName.set(name, { buffer:0, site:0 });
-      const rec = countByName.get(name);
-      rec.buffer++;
-      if(withinSiteSet.has(f)) rec.site++;
+      const props = f.properties || {};
+      const name = pickSightingField(props, 'scientificName');
+      if(name){
+        if(!countByName.has(name)) countByName.set(name, { buffer:0, site:0 });
+        const rec = countByName.get(name);
+        rec.buffer++;
+        if(withinSiteSet.has(f)) rec.site++;
+      }
+      const kingdom = pickSightingField(props, 'kingdom') || 'Unknown';
+      countByKingdom.set(kingdom, (countByKingdom.get(kingdom) || 0) + 1);
     });
 
-    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, truncated: !!gj.truncated };
+    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByKingdom, truncated: !!gj.truncated };
+    renderSightingsOnMap(records);
     renderSpeciesSightingsResult(window.sightingsResult);
     statusEl.innerHTML = `<span class="ok">Found ${records.length} sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself.</span>` +
       (gj.truncated ? '<br><span class="err">Result truncated at the server\'s record cap — export may be incomplete.</span>' : '');
@@ -3129,13 +3216,33 @@ document.getElementById('fetchSpeciesSightings').addEventListener('click', fetch
 
 function renderSpeciesSightingsResult(result){
   const el = document.getElementById('speciesSightingsResult');
+  const kingdoms = [...result.countByKingdom.entries()].sort((a,b)=> b[1]-a[1]);
+  const breakdown = kingdoms.map(([k,n]) => `${k} (${n})`).join(', ');
+  const legend = kingdoms.map(([k])=>{
+    const sym = kingdomSymbolFor(k);
+    const shapeCss = sym.shape === 'triangle'
+      ? `width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:11px solid ${sym.color};display:inline-block;`
+      : sym.shape === 'square'
+      ? `width:11px;height:11px;background:${sym.color};display:inline-block;`
+      : sym.shape === 'diamond'
+      ? `width:9px;height:9px;background:${sym.color};display:inline-block;transform:rotate(45deg);`
+      : `width:11px;height:11px;background:${sym.color};border-radius:50%;display:inline-block;`;
+    return `<span style="margin-right:10px;white-space:nowrap;"><span style="${shapeCss}vertical-align:middle;margin-right:4px;"></span>${k}</span>`;
+  }).join('');
   el.innerHTML = `
-    <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 10px;line-height:1.5;">
-      ${result.records.length} sighting record(s) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself).
+    <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 4px;line-height:1.5;">
+      ${result.records.length} sighting record(s) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself) — by kingdom: ${breakdown}.
       BioNet Atlas generalises/obscures coordinates for some sensitive threatened species records — treat those locations as indicative, not exact.
     </p>
+    <div style="margin:6px 0 10px;">${legend}</div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:8px;"><input type="checkbox" id="toggleSightingsMap" checked> Show on map</label>
     <button class="secondary" id="exportSightings" style="width:100%;">Export sighting records (.xlsx)</button>`;
   document.getElementById('exportSightings').addEventListener('click', ()=> exportSpeciesSightings(result));
+  document.getElementById('toggleSightingsMap').addEventListener('change', e=>{
+    if(!sightingsMapLayerGroup) return;
+    if(e.target.checked) sightingsMapLayerGroup.addTo(map);
+    else map.removeLayer(sightingsMapLayerGroup);
+  });
 }
 
 // Atlas Count columns in the threatened species export (see TS_SUMMARY_COLUMNS
@@ -3152,6 +3259,7 @@ function atlasCountFor(scientificName, which){
 // returned, appended as-is in first-seen order, so nothing is lost even if
 // none of the friendly-column guesses match this service's real field names.
 const SIGHTINGS_FRIENDLY_COLUMNS = [
+  { label:'Kingdom', kind:'kingdom' },
   { label:'Scientific Name', kind:'scientificName' },
   { label:'Common Name', kind:'commonName' },
   { label:'Record Date', kind:'recordDate' },
@@ -3162,6 +3270,23 @@ const SIGHTINGS_FRIENDLY_COLUMNS = [
   { label:'Commonwealth Conservation Status', kind:'conservationStatusCth' },
 ];
 
+// Lightens a hex colour toward white by `tint` (0-1) — same blend formula
+// Excel itself uses for its "Lighter %" theme-colour variants, so the Kingdom
+// fills read as a matching family with the map markers' full-strength colour.
+function lightenHex(hex, tint){
+  const n = parseInt(hex.replace('#',''), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const adj = c => Math.round(c + (255-c)*tint);
+  return [adj(r),adj(g),adj(b)].map(c=>c.toString(16).padStart(2,'0')).join('').toUpperCase();
+}
+function styleKingdomCell(ws, rowIdx, colIdx, kingdom){
+  const ref = XLSX.utils.encode_cell({ r:rowIdx, c:colIdx });
+  const cell = ws[ref];
+  if(!cell) return;
+  const sym = kingdomSymbolFor(kingdom);
+  cell.s = { fill:{ patternType:'solid', fgColor:{ rgb: lightenHex(sym.color, 0.75) } }, font:{ color:{ rgb: sym.color.replace('#','') } } };
+}
+
 function exportSpeciesSightings(result){
   if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
 
@@ -3171,17 +3296,30 @@ function exportSpeciesSightings(result){
     Object.keys(f.properties || {}).forEach(k=>{ if(!seen.has(k)){ seen.add(k); rawFieldNames.push(k); } });
   });
 
+  // Grouped by kingdom (then species name within it) so the "different
+  // symbols" breakdown carries through to the spreadsheet as adjacent,
+  // colour-coded blocks, not just an unordered dump.
+  const sorted = [...result.records].sort((a,b)=>{
+    const ka = pickSightingField(a.properties||{}, 'kingdom') || 'Unknown';
+    const kb = pickSightingField(b.properties||{}, 'kingdom') || 'Unknown';
+    if(ka !== kb) return ka.localeCompare(kb);
+    const na = pickSightingField(a.properties||{}, 'scientificName') || '';
+    const nb = pickSightingField(b.properties||{}, 'scientificName') || '';
+    return na.localeCompare(nb);
+  });
+
   const headerRow = ['Within subject site', ...SIGHTINGS_FRIENDLY_COLUMNS.map(c=>c.label), 'Longitude', 'Latitude', ...rawFieldNames];
+  const kingdomColIdx = headerRow.indexOf('Kingdom');
   const rows = [
     ['SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
     ['Generated', new Date().toLocaleString()],
-    ['Note: the friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn\'t match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact.'],
+    ['Note: the friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn\'t match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Kingdom, matching the symbol/colour used for that kingdom on the map.'],
     [],
     headerRow
   ];
   const headerRowIdx = rows.length - 1;
 
-  result.records.forEach(f=>{
+  sorted.forEach(f=>{
     const props = f.properties || {};
     const withinSite = result.withinSiteSet.has(f) ? 'Yes' : 'No';
     let lon = '', lat = '';
@@ -3197,7 +3335,11 @@ function exportSpeciesSightings(result){
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = headerRow.map(h => ({ wch: Math.min(34, Math.max(10, String(h).length + 2)) }));
   styleHeaderRow(ws, headerRowIdx, headerRow.map(()=> null));
-  result.records.forEach((f,i)=> styleValueCell(ws, headerRowIdx + 1 + i, 0));
+  sorted.forEach((f,i)=>{
+    const rowIdx = headerRowIdx + 1 + i;
+    styleValueCell(ws, rowIdx, 0);
+    styleKingdomCell(ws, rowIdx, kingdomColIdx, pickSightingField(f.properties||{}, 'kingdom') || 'Unknown');
+  });
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sightings');
