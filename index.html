@@ -16,6 +16,10 @@
      sheets the threatened species exports need. -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
+<!-- docx: builds the species sightings Word (.docx) summary client-side via
+     Packer.toBlob() — this UMD build exposes a global `docx` and works with
+     no bundler, same pattern as the other CDN libraries above. -->
+<script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.umd.cjs"></script>
 <style>
   :root{
     --ink:#1E2A24;
@@ -2218,12 +2222,16 @@ function buildSiteContext(){
     // records aren't included here (there can be thousands); this is a
     // per-species count only, capped to the top 40 by buffer count — the
     // full record-level list (with dates, sources, etc.) is only in the
-    // exported Excel.
+    // exported Excel. Only records that qualify as threatened under the
+    // NSW BC Act (state status includes E1/E2/E4A/V) are included at all —
+    // see bcActQualifies() — so excludedNonQualifyingRecords tells the
+    // model how many raw Atlas records were filtered out.
     speciesSightings: (window.sightingsResult && window.sightingsResult.records.length) ? {
       totalRecordsInBuffer: window.sightingsResult.records.length,
       totalRecordsOnSubjectSite: window.sightingsResult.withinSite.length,
+      excludedNonQualifyingRecords: window.sightingsResult.excludedCount,
       truncated: !!window.sightingsResult.truncated,
-      recordCountByKingdom: Object.fromEntries(window.sightingsResult.countByKingdom),
+      recordCountByClass: Object.fromEntries(window.sightingsResult.countByClass),
       topSpeciesByRecordCount: [...window.sightingsResult.countByName.entries()]
         .sort((a,b)=> b[1].buffer - a[1].buffer)
         .slice(0, 40)
@@ -3145,6 +3153,7 @@ const SIGHTING_FIELD_CANDIDATES = {
   scientificName: ['scientificName','ScientificName','SCIENTIFICNAME','sciName'],
   commonName: ['vernacularName','commonName','CommonName','VERNACULARNAME'],
   kingdom: ['kingdom','Kingdom','KINGDOM','taxonKingdom'],
+  class: ['class','Class','CLASS','taxonClass'],
   recordDate: ['recordDate','RecordDate','sightingDate','obsDate','eventDate','RECORDDATE'],
   numberOfIndividuals: ['numberOfIndividuals','NumberOfIndividuals','individualCount'],
   dataSource: ['dataSource','DataSource','source','recordSource'],
@@ -3160,21 +3169,54 @@ function pickSightingField(props, kind){
   return null;
 }
 
-// Distinct colour AND shape per kingdom — told apart by silhouette, not just
-// colour, once markers are small/overlapping or for colourblind-safe reading.
-// Unrecognised/missing kingdom values fall back to a plain grey circle rather
-// than being dropped, so nothing goes unplotted just because a value doesn't
-// match this list.
-const KINGDOM_SYMBOLS = {
-  Animalia:  { shape:'circle',   color:'#C1440E' },
-  Plantae:   { shape:'triangle', color:'#2E7D32' },
-  Fungi:     { shape:'square',   color:'#7B4EA3' },
-  Chromista: { shape:'diamond',  color:'#1976D2' },
-  Protista:  { shape:'diamond',  color:'#1976D2' },
-  Bacteria:  { shape:'diamond',  color:'#1976D2' },
-};
-const KINGDOM_FALLBACK_SYMBOL = { shape:'circle', color:'#666666' };
-function kingdomSymbolFor(kingdom){ return KINGDOM_SYMBOLS[kingdom] || KINGDOM_FALLBACK_SYMBOL; }
+// For NSW (BC Act) only, a record counts as threatened if its state
+// conservation status contains at least one of these codes. "P" (Protected)
+// is a general protection status, not a threat category, so it doesn't
+// qualify on its own — "V,P" still qualifies (because of the V), but a bare
+// "P" or a bare numeric code (e.g. "2", "3" — schedule references of
+// unconfirmed meaning) does not.
+const QUALIFYING_BC_ACT_CODES = ['E1','E2','E4A','V'];
+function parseStatusCodes(raw){
+  if(!raw) return [];
+  return String(raw).split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+}
+function bcActQualifies(rawStateStatus){
+  return parseStatusCodes(rawStateStatus).some(c => QUALIFYING_BC_ACT_CODES.includes(c));
+}
+
+// "BC Act: E1,P; EPBC Act: V" style combined status string for display/export
+// — omits the "; EPBC Act: ..." half entirely when there's no Commonwealth
+// status on the record, rather than showing an empty clause.
+function buildLegalStatusString(props){
+  const bc = pickSightingField(props, 'conservationStatusState');
+  const epbc = pickSightingField(props, 'conservationStatusCth');
+  const parts = [];
+  if(bc) parts.push('BC Act: ' + bc);
+  if(epbc) parts.push('EPBC Act: ' + epbc);
+  return parts.join('; ');
+}
+
+// Distinct colour AND shape per Class (Aves, Mammalia, Magnoliopsida, ...) —
+// told apart by silhouette, not just colour, once markers are small/
+// overlapping or for colourblind-safe reading. Assigned dynamically (there's
+// no fixed list of classes the way there is for kingdoms) in descending
+// order of how many records each class has, so the most common classes get
+// the most visually distinct combinations; reset per fetch since a new site
+// has a different mix of classes.
+const CLASS_SHAPE_CYCLE = ['circle','triangle','square','diamond'];
+const CLASS_COLOR_PALETTE = ['#C1440E','#2E7D32','#7B4EA3','#1976D2','#B8860B','#00838F','#AD1457','#5D4037','#455A64','#8E24AA','#43A047','#6D4C41'];
+let classSymbolCache = {};
+let classSymbolOrder = [];
+function resetClassSymbols(){ classSymbolCache = {}; classSymbolOrder = []; }
+function classSymbolFor(className){
+  const key = className || 'Unknown';
+  if(!classSymbolCache[key]){
+    const idx = classSymbolOrder.length;
+    classSymbolCache[key] = { shape: CLASS_SHAPE_CYCLE[idx % CLASS_SHAPE_CYCLE.length], color: CLASS_COLOR_PALETTE[idx % CLASS_COLOR_PALETTE.length] };
+    classSymbolOrder.push(key);
+  }
+  return classSymbolCache[key];
+}
 
 function shapeDivIcon(shape, color){
   const size = 14;
@@ -3200,13 +3242,14 @@ function renderSightingsOnMap(records){
     const coords = f.geometry.type === 'MultiPoint' ? f.geometry.coordinates[0] : f.geometry.coordinates;
     if(!Array.isArray(coords)) return null;
     const props = f.properties || {};
-    const kingdom = pickSightingField(props, 'kingdom') || 'Unknown';
-    const sym = kingdomSymbolFor(kingdom);
+    const className = pickSightingField(props, 'class') || 'Unknown';
+    const sym = classSymbolFor(className);
     const marker = L.marker([coords[1], coords[0]], { icon: shapeDivIcon(sym.shape, sym.color) });
     const name = pickSightingField(props, 'scientificName') || '(unknown species)';
     const common = pickSightingField(props, 'commonName');
     const date = pickSightingField(props, 'recordDate');
-    marker.bindPopup(`<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Kingdom</b>: ${kingdom}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}</div>`);
+    const distance = f._distanceM != null ? formatDistanceM(f._distanceM) + ' from subject site' : null;
+    marker.bindPopup(`<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Class</b>: ${className}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}${distance?`<div><b>Distance</b>: ${distance}</div>`:''}</div>`);
     return marker;
   }).filter(Boolean);
   sightingsMapLayerGroup = L.layerGroup(markers).addTo(map);
@@ -3221,22 +3264,87 @@ function pointWithinPolygon(feature, polygon){
   }catch(e){ return false; }
 }
 
+// polygonToLine() returns a single LineString Feature for a Polygon, but a
+// FeatureCollection of one LineString per part for a MultiPolygon (e.g. a
+// multi-part uploaded boundary) — normalise both to an array of line
+// features so distance can be measured against every part.
+function boundaryLineFeatures(geom){
+  const result = turf.polygonToLine(turf.feature(geom));
+  return result.type === 'FeatureCollection' ? result.features : [result];
+}
+
+// Straight-line distance from a sighting point to the subject site boundary,
+// in metres — 0 if the point falls within the boundary itself, otherwise the
+// distance to the nearest edge (checked against every part of a multi-part
+// boundary). Returns null if the geometry is missing/unusable rather than
+// throwing, so one bad record doesn't fail the whole fetch.
+function distanceFromSiteMeters(feature, siteLines){
+  try{
+    const g = feature.geometry;
+    if(!g) return null;
+    const coords = g.type === 'MultiPoint' ? g.coordinates[0] : g.coordinates;
+    const pt = turf.point(coords);
+    if(turf.booleanPointInPolygon(pt, turf.feature(boundaryGeom))) return 0;
+    let minKm = Infinity;
+    siteLines.forEach(line=>{
+      const d = turf.pointToLineDistance(pt, line, { units:'kilometers' });
+      if(d < minKm) minKm = d;
+    });
+    return minKm === Infinity ? null : minKm * 1000;
+  }catch(e){ return null; }
+}
+
+function formatDistanceM(m){
+  if(m == null) return null;
+  return Math.round(m).toLocaleString('en-AU') + ' m';
+}
+
+// BioNet's date fields could plausibly come back as an ISO string, an
+// epoch-millisecond number (the ArcGIS Server default for date fields
+// unless dateFieldsTimeReference is configured otherwise), or something
+// else entirely — try each in turn and fall back to null (rather than a
+// garbled string) if none parse.
+function formatSightingDate(raw){
+  if(raw == null || raw === '') return null;
+  if(typeof raw === 'number'){
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0,10);
+  }
+  const s = String(raw);
+  const isoMatch = s.match(/^\d{4}-\d{2}-\d{2}/);
+  if(isoMatch) return isoMatch[0];
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0,10);
+}
+
 async function fetchSpeciesSightingsForSite(){
   if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
   const statusEl = document.getElementById('sightingsFetchStatus');
   const btn = document.getElementById('fetchSpeciesSightings');
   btn.disabled = true;
   statusEl.textContent = 'Querying BioNet Atlas…';
+  resetClassSymbols();
 
   try{
     const lyr = { name:'BioNet Species Sightings', url: BIONET_SIGHTINGS_URL, id: BIONET_SIGHTINGS_LAYER_ID };
     const gj = await queryLayer(lyr);
-    const records = gj.features || [];
+    const allRecords = gj.features || [];
+
+    // Only records whose BC Act status actually makes them "threatened" —
+    // see bcActQualifies() above. Everything else (protection-only "P"
+    // records, or records with no state conservation status at all) is
+    // dropped before anything downstream ever sees it.
+    const records = allRecords.filter(f => bcActQualifies(pickSightingField(f.properties||{}, 'conservationStatusState')));
+    const excludedCount = allRecords.length - records.length;
+
+    const siteLines = boundaryLineFeatures(boundaryGeom);
+    records.forEach(f=>{ f._distanceM = distanceFromSiteMeters(f, siteLines); });
+
     const withinSite = records.filter(f => pointWithinPolygon(f, boundaryGeom));
     const withinSiteSet = new Set(withinSite);
 
     const countByName = new Map(); // scientificName -> { buffer: n, site: n }
-    const countByKingdom = new Map(); // kingdom -> record count in buffer
+    const countByClass = new Map(); // class -> record count in buffer
     records.forEach(f=>{
       const props = f.properties || {};
       const name = pickSightingField(props, 'scientificName');
@@ -3246,14 +3354,17 @@ async function fetchSpeciesSightingsForSite(){
         rec.buffer++;
         if(withinSiteSet.has(f)) rec.site++;
       }
-      const kingdom = pickSightingField(props, 'kingdom') || 'Unknown';
-      countByKingdom.set(kingdom, (countByKingdom.get(kingdom) || 0) + 1);
+      const className = pickSightingField(props, 'class') || 'Unknown';
+      countByClass.set(className, (countByClass.get(className) || 0) + 1);
     });
 
-    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByKingdom, truncated: !!gj.truncated };
+    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, truncated: !!gj.truncated };
+    // Symbols assigned in descending order of frequency, so the most common
+    // classes on this site get the most visually distinct shape/colour.
+    [...countByClass.entries()].sort((a,b)=> b[1]-a[1]).forEach(([k])=> classSymbolFor(k));
     renderSightingsOnMap(records);
     renderSpeciesSightingsResult(window.sightingsResult);
-    statusEl.innerHTML = `<span class="ok">Found ${records.length} sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself.</span>` +
+    statusEl.innerHTML = `<span class="ok">Found ${records.length} threatened sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself (${excludedCount} record(s) excluded — no qualifying BC Act status).</span>` +
       (gj.truncated ? '<br><span class="err">Result truncated at the server\'s record cap — export may be incomplete.</span>' : '');
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
@@ -3265,10 +3376,10 @@ document.getElementById('fetchSpeciesSightings').addEventListener('click', fetch
 
 function renderSpeciesSightingsResult(result){
   const el = document.getElementById('speciesSightingsResult');
-  const kingdoms = [...result.countByKingdom.entries()].sort((a,b)=> b[1]-a[1]);
-  const breakdown = kingdoms.map(([k,n]) => `${k} (${n})`).join(', ');
-  const legend = kingdoms.map(([k])=>{
-    const sym = kingdomSymbolFor(k);
+  const classes = [...result.countByClass.entries()].sort((a,b)=> b[1]-a[1]);
+  const breakdown = classes.map(([k,n]) => `${k} (${n})`).join(', ');
+  const legend = classes.map(([k])=>{
+    const sym = classSymbolFor(k);
     const shapeCss = sym.shape === 'triangle'
       ? `width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:11px solid ${sym.color};display:inline-block;`
       : sym.shape === 'square'
@@ -3280,13 +3391,17 @@ function renderSpeciesSightingsResult(result){
   }).join('');
   el.innerHTML = `
     <p style="font-size:11.5px;color:var(--ink-soft);margin:6px 0 4px;line-height:1.5;">
-      ${result.records.length} sighting record(s) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself) — by kingdom: ${breakdown}.
+      ${result.records.length} threatened sighting record(s) (BC Act E1/E2/E4A/V only — ${result.excludedCount} non-qualifying record(s) excluded) across ${result.countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (${result.withinSite.length} within the subject site boundary itself) — by class: ${breakdown}.
       BioNet Atlas generalises/obscures coordinates for some sensitive threatened species records — treat those locations as indicative, not exact.
     </p>
     <div style="margin:6px 0 10px;">${legend}</div>
     <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:8px;"><input type="checkbox" id="toggleSightingsMap" checked> Show on map</label>
-    <button class="secondary" id="exportSightings" style="width:100%;">Export sighting records (.xlsx)</button>`;
+    <div style="display:flex;gap:6px;">
+      <button class="secondary" id="exportSightings" style="flex:1;">Export records (.xlsx)</button>
+      <button class="secondary" id="exportSightingsDocx" style="flex:1;">Export summary (.docx)</button>
+    </div>`;
   document.getElementById('exportSightings').addEventListener('click', ()=> exportSpeciesSightings(result));
+  document.getElementById('exportSightingsDocx').addEventListener('click', ()=> exportSpeciesSightingsDocx(result));
   document.getElementById('toggleSightingsMap').addEventListener('change', e=>{
     if(!sightingsMapLayerGroup) return;
     if(e.target.checked) sightingsMapLayerGroup.addTo(map);
@@ -3308,6 +3423,7 @@ function atlasCountFor(scientificName, which){
 // returned, appended as-is in first-seen order, so nothing is lost even if
 // none of the friendly-column guesses match this service's real field names.
 const SIGHTINGS_FRIENDLY_COLUMNS = [
+  { label:'Class', kind:'class' },
   { label:'Kingdom', kind:'kingdom' },
   { label:'Scientific Name', kind:'scientificName' },
   { label:'Common Name', kind:'commonName' },
@@ -3320,7 +3436,7 @@ const SIGHTINGS_FRIENDLY_COLUMNS = [
 ];
 
 // Lightens a hex colour toward white by `tint` (0-1) — same blend formula
-// Excel itself uses for its "Lighter %" theme-colour variants, so the Kingdom
+// Excel itself uses for its "Lighter %" theme-colour variants, so the Class
 // fills read as a matching family with the map markers' full-strength colour.
 function lightenHex(hex, tint){
   const n = parseInt(hex.replace('#',''), 16);
@@ -3328,11 +3444,11 @@ function lightenHex(hex, tint){
   const adj = c => Math.round(c + (255-c)*tint);
   return [adj(r),adj(g),adj(b)].map(c=>c.toString(16).padStart(2,'0')).join('').toUpperCase();
 }
-function styleKingdomCell(ws, rowIdx, colIdx, kingdom){
+function styleClassCell(ws, rowIdx, colIdx, className){
   const ref = XLSX.utils.encode_cell({ r:rowIdx, c:colIdx });
   const cell = ws[ref];
   if(!cell) return;
-  const sym = kingdomSymbolFor(kingdom);
+  const sym = classSymbolFor(className);
   cell.s = { fill:{ patternType:'solid', fgColor:{ rgb: lightenHex(sym.color, 0.75) } }, font:{ color:{ rgb: sym.color.replace('#','') } } };
 }
 
@@ -3345,24 +3461,24 @@ function exportSpeciesSightings(result){
     Object.keys(f.properties || {}).forEach(k=>{ if(!seen.has(k)){ seen.add(k); rawFieldNames.push(k); } });
   });
 
-  // Grouped by kingdom (then species name within it) so the "different
+  // Grouped by class (then species name within it) so the "different
   // symbols" breakdown carries through to the spreadsheet as adjacent,
   // colour-coded blocks, not just an unordered dump.
   const sorted = [...result.records].sort((a,b)=>{
-    const ka = pickSightingField(a.properties||{}, 'kingdom') || 'Unknown';
-    const kb = pickSightingField(b.properties||{}, 'kingdom') || 'Unknown';
+    const ka = pickSightingField(a.properties||{}, 'class') || 'Unknown';
+    const kb = pickSightingField(b.properties||{}, 'class') || 'Unknown';
     if(ka !== kb) return ka.localeCompare(kb);
     const na = pickSightingField(a.properties||{}, 'scientificName') || '';
     const nb = pickSightingField(b.properties||{}, 'scientificName') || '';
     return na.localeCompare(nb);
   });
 
-  const headerRow = ['Within subject site', ...SIGHTINGS_FRIENDLY_COLUMNS.map(c=>c.label), 'Longitude', 'Latitude', ...rawFieldNames];
-  const kingdomColIdx = headerRow.indexOf('Kingdom');
+  const headerRow = ['Within subject site', 'Distance from site (m)', ...SIGHTINGS_FRIENDLY_COLUMNS.map(c=>c.label), 'Longitude', 'Latitude', ...rawFieldNames];
+  const classColIdx = headerRow.indexOf('Class');
   const rows = [
-    ['SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
+    ['THREATENED SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
     ['Generated', new Date().toLocaleString()],
-    ['Note: the friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn\'t match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Kingdom, matching the symbol/colour used for that kingdom on the map.'],
+    [`Note: only records whose NSW (BC Act) status includes E1, E2, E4A or V are included (${result.excludedCount} non-qualifying record(s) excluded — a bare "P" or a bare numeric code alone doesn't qualify). Friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn't match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Class, matching the symbol/colour used on the map.`],
     [],
     headerRow
   ];
@@ -3378,7 +3494,7 @@ function exportSpeciesSightings(result){
     }
     const friendlyVals = SIGHTINGS_FRIENDLY_COLUMNS.map(c => pickSightingField(props, c.kind) || '');
     const rawVals = rawFieldNames.map(k => props[k] != null ? props[k] : '');
-    rows.push([withinSite, ...friendlyVals, lon, lat, ...rawVals]);
+    rows.push([withinSite, f._distanceM != null ? Math.round(f._distanceM) : '', ...friendlyVals, lon, lat, ...rawVals]);
   });
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -3387,12 +3503,195 @@ function exportSpeciesSightings(result){
   sorted.forEach((f,i)=>{
     const rowIdx = headerRowIdx + 1 + i;
     styleValueCell(ws, rowIdx, 0);
-    styleKingdomCell(ws, rowIdx, kingdomColIdx, pickSightingField(f.properties||{}, 'kingdom') || 'Unknown');
+    styleClassCell(ws, rowIdx, classColIdx, pickSightingField(f.properties||{}, 'class') || 'Unknown');
   });
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sightings');
-  XLSX.writeFile(wb, 'species-sightings-' + new Date().toISOString().slice(0,10) + '.xlsx');
+  XLSX.writeFile(wb, 'threatened-species-sightings-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+/* =========================================================
+   Word (.docx) summary — one table per Kingdom/Class group, styled to
+   match the department's existing house template (generate_word_report.js):
+   Montserrat 9pt, olive-green banner row per group, beige column-header
+   row, landscape A4. Built directly from the already-fetched, filtered,
+   distance-annotated sightings (window.sightingsResult) — no intermediate
+   JSON/Python step needed, everything is already in memory.
+========================================================= */
+const DOCX_FONT = 'Montserrat';
+const DOCX_SIZE = 18; // half-points -> 9pt
+const DOCX_GREEN = 'A3B38C'; // banner row fill
+const DOCX_BEIGE = 'F4F0EE'; // column header row fill
+const DOCX_HEADER_LABELS = ['Scientific Name', 'Common Name', 'Legal Status', 'Number of records', 'Closest record and date', 'Most recent and proximity'];
+const DOCX_COL_WIDTHS = [2200, 2200, 1500, 1100, 1700, 1700]; // DXA, sums to 10400
+const DOCX_TABLE_WIDTH = DOCX_COL_WIDTHS.reduce((a,b)=>a+b, 0);
+
+// Animalia/Plantae -> Fauna/Flora (matching the house template's grouping
+// labels); anything else (Fungi, Chromista, ...) keeps its own raw kingdom
+// name as its own bucket rather than being silently dropped.
+function kingdomBucket(rawKingdom){
+  if(rawKingdom === 'Animalia') return 'Fauna';
+  if(rawKingdom === 'Plantae') return 'Flora';
+  return rawKingdom || 'Unknown';
+}
+
+// One row per species: total record count, the single closest record
+// (by distance) and its date, and the single most recently dated record
+// and its distance — exactly the three summary figures the house template
+// reports per species, computed from every qualifying record for that
+// species rather than re-fetched.
+function aggregateSightingsBySpecies(records){
+  const bySpecies = new Map();
+  records.forEach(f=>{
+    const props = f.properties || {};
+    const name = pickSightingField(props, 'scientificName');
+    if(!name) return;
+    if(!bySpecies.has(name)){
+      bySpecies.set(name, {
+        scientificName: name,
+        commonName: pickSightingField(props, 'commonName') || '',
+        kingdom: kingdomBucket(pickSightingField(props, 'kingdom')),
+        class: pickSightingField(props, 'class') || 'Unknown',
+        legalStatus: buildLegalStatusString(props),
+        recs: []
+      });
+    }
+    bySpecies.get(name).recs.push({
+      distance: f._distanceM,
+      dateStr: formatSightingDate(pickSightingField(props, 'recordDate'))
+    });
+  });
+
+  const result = [];
+  bySpecies.forEach(sp=>{
+    const withDist = sp.recs.filter(r => r.distance != null);
+    const withDate = sp.recs.filter(r => r.dateStr);
+    let closestStr = '-';
+    if(withDist.length){
+      const closest = withDist.reduce((a,b)=> b.distance < a.distance ? b : a);
+      closestStr = formatDistanceM(closest.distance) + (closest.dateStr ? ` (${closest.dateStr})` : '');
+    }
+    let recentStr = '-';
+    if(withDate.length){
+      // ISO "YYYY-MM-DD" strings sort correctly with plain string comparison.
+      const recent = withDate.reduce((a,b)=> b.dateStr > a.dateStr ? b : a);
+      recentStr = recent.dateStr + (recent.distance != null ? ` (${formatDistanceM(recent.distance)})` : '');
+    }
+    result.push({
+      ScientificName: sp.scientificName, CommonName: sp.commonName || '-', LegalStatus: sp.legalStatus || '-',
+      NumRecords: sp.recs.length, ClosestStr: closestStr, RecentStr: recentStr,
+      Kingdom: sp.kingdom, Class: sp.class
+    });
+  });
+  return result;
+}
+
+function docxBannerRow(text){
+  const { TableRow, TableCell, Paragraph, TextRun, WidthType, ShadingType } = docx;
+  return new TableRow({
+    tableHeader: true,
+    children: [new TableCell({
+      width: { size: DOCX_TABLE_WIDTH, type: WidthType.DXA },
+      columnSpan: DOCX_COL_WIDTHS.length,
+      shading: { type: ShadingType.CLEAR, color: 'auto', fill: DOCX_GREEN },
+      children: [new Paragraph({ children: [new TextRun({ text, bold:true, font:DOCX_FONT, size:DOCX_SIZE })] })],
+    })],
+  });
+}
+function docxHeaderRow(){
+  const { TableRow, TableCell, Paragraph, TextRun, WidthType, ShadingType } = docx;
+  return new TableRow({
+    tableHeader: true,
+    children: DOCX_HEADER_LABELS.map((label,i)=> new TableCell({
+      width: { size: DOCX_COL_WIDTHS[i], type: WidthType.DXA },
+      shading: { type: ShadingType.CLEAR, color:'auto', fill: DOCX_BEIGE },
+      children: [new Paragraph({ children: [new TextRun({ text:label, bold:true, font:DOCX_FONT, size:DOCX_SIZE })] })],
+    })),
+  });
+}
+function docxDataRow(r){
+  const { TableRow, TableCell, Paragraph, TextRun, WidthType } = docx;
+  const values = [r.ScientificName, r.CommonName, r.LegalStatus, String(r.NumRecords), r.ClosestStr, r.RecentStr];
+  return new TableRow({
+    children: values.map((v,i)=> new TableCell({
+      width: { size: DOCX_COL_WIDTHS[i], type: WidthType.DXA },
+      children: [new Paragraph({ children: [new TextRun({ text: v==null?'-':String(v), font:DOCX_FONT, size:DOCX_SIZE, italics: i===0 })] })],
+    })),
+  });
+}
+function docxBuildTable(bannerText, rows){
+  const { Table, WidthType } = docx;
+  return new Table({
+    width: { size: DOCX_TABLE_WIDTH, type: WidthType.DXA },
+    columnWidths: DOCX_COL_WIDTHS,
+    rows: [docxBannerRow(bannerText), docxHeaderRow(), ...rows.map(docxDataRow)],
+  });
+}
+
+async function exportSpeciesSightingsDocx(result){
+  if(typeof docx === 'undefined'){ alert('The Word export library did not load — check network access to jsdelivr.'); return; }
+  const { Document, Packer, Paragraph, TextRun } = docx;
+
+  const species = aggregateSightingsBySpecies(result.records);
+  const kingdoms = {};
+  species.forEach(row=>{
+    (kingdoms[row.Kingdom] ??= {});
+    (kingdoms[row.Kingdom][row.Class] ??= []).push(row);
+  });
+  // Fauna then Flora (matching the house template), then anything else
+  // (e.g. Fungi) alphabetically after — the template's own fixed
+  // ['Fauna','Flora'] order would otherwise silently drop those groups.
+  const kingdomOrder = ['Fauna','Flora', ...Object.keys(kingdoms).filter(k=>k!=='Fauna'&&k!=='Flora').sort()];
+
+  const children = [
+    new Paragraph({
+      children: [new TextRun({ text:'Threatened Species Sightings Summary', bold:true, font:DOCX_FONT, size:32 })],
+      spacing: { after: 150 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: `Records within the ${ASSESSMENT_BUFFER_KM}km assessment buffer whose NSW (BC Act) status includes E1, E2, E4A or V, grouped by kingdom and class. "Closest record and date" reports the nearest sighting to the subject site and when it was recorded; "Most recent and proximity" reports the latest sighting and its distance from the site.`,
+        italics:true, font:DOCX_FONT, size:DOCX_SIZE,
+      })],
+      spacing: { after: 300 },
+    }),
+  ];
+
+  kingdomOrder.forEach(kingdom=>{
+    if(!kingdoms[kingdom]) return;
+    const classes = kingdoms[kingdom];
+    const classNames = Object.keys(classes).sort();
+    if(classNames.length === 1){
+      const rows = classes[classNames[0]].slice().sort((a,b)=> a.ScientificName.localeCompare(b.ScientificName));
+      children.push(new Paragraph({ text:'', spacing:{ before:200 } }));
+      children.push(docxBuildTable(`KINGDOM: ${kingdom}`, rows));
+    } else {
+      classNames.forEach(className=>{
+        const rows = classes[className].slice().sort((a,b)=> a.ScientificName.localeCompare(b.ScientificName));
+        children.push(new Paragraph({ text:'', spacing:{ before:200 } }));
+        children.push(docxBuildTable(`KINGDOM: ${kingdom}, CLASS: ${className}`, rows));
+      });
+    }
+  });
+
+  const doc = new Document({
+    styles: { default: { document: { run: { font:DOCX_FONT, size:DOCX_SIZE } } } },
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 16838, height: 11906 }, // A4
+          orientation: 'landscape',
+          margin: { top:720, bottom:720, left:720, right:720 },
+        },
+      },
+      children,
+    }],
+  });
+
+  const blob = await Packer.toBlob(doc);
+  downloadBlob('threatened-species-summary-' + new Date().toISOString().slice(0,10) + '.docx', blob,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }
 
 // One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
