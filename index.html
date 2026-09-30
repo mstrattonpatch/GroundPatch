@@ -3337,6 +3337,23 @@ async function fetchSpeciesSightingsForSite(){
     const records = allRecords.filter(f => bcActQualifies(pickSightingField(f.properties||{}, 'conservationStatusState')));
     const excludedCount = allRecords.length - records.length;
 
+    // Every single raw record excluded means pickSightingField() almost
+    // certainly isn't finding a match under any of its guessed field-name
+    // spellings on THIS service (rather than every record genuinely lacking
+    // a qualifying status) — dump the real field names/values straight into
+    // the status box so that can be fixed without a separate round-trip to
+    // go fetch a sample response.
+    if(allRecords.length > 0 && records.length === 0){
+      const sampleProps = allRecords[0].properties || {};
+      statusEl.innerHTML = `<span class="err">Fetched ${allRecords.length} raw record(s), but none matched a recognised state-conservation field name, so all were excluded — this almost certainly means the field name this code expects doesn't match this service's real schema, not that none of the records qualify.</span>
+        <div style="margin-top:6px;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);word-break:break-all;">
+          <b>Raw field names on this service:</b> ${Object.keys(sampleProps).join(', ') || '(none — empty properties object)'}<br><br>
+          <b>Example record:</b> ${JSON.stringify(sampleProps)}
+        </div>`;
+      window.sightingsResult = null;
+      return;
+    }
+
     const siteLines = boundaryLineFeatures(boundaryGeom);
     records.forEach(f=>{ f._distanceM = distanceFromSiteMeters(f, siteLines); });
 
