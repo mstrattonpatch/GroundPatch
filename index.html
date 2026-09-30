@@ -1635,6 +1635,7 @@ async function queryLayerByIds(lyr){
   const endpoint = `${lyr.url}/${lyr.id}/query`;
   const idParams = new URLSearchParams({
     f:'json',
+    where: lyr.where || '1=1',
     geometry: JSON.stringify(esriGeom),
     geometryType:'esriGeometryPolygon',
     inSR:'4326',
@@ -1649,7 +1650,11 @@ async function queryLayerByIds(lyr){
 
   const TRUNCATE_AT = 20000; // hard safety cap
   const truncated = ids.length > TRUNCATE_AT;
-  if(truncated) ids = ids.slice(0, TRUNCATE_AT);
+  // Highest OBJECTIDs first — on a layer where ID roughly tracks insertion
+  // order (BioNet's sightings service in particular), truncating from the
+  // low end instead would systematically drop the most RECENT records
+  // rather than an arbitrary slice, which is a much worse loss.
+  if(truncated){ ids = [...ids].sort((a,b)=> b-a).slice(0, TRUNCATE_AT); }
 
   const allFeatures = [];
   let partial = false;
@@ -1690,6 +1695,7 @@ async function queryLayerSimple(lyr){
   const endpoint = `${lyr.url}/${lyr.id}/query`;
   const params = new URLSearchParams({
     f:'geojson',
+    where: lyr.where || '1=1',
     geometry: JSON.stringify(esriGeom),
     geometryType:'esriGeometryPolygon',
     inSR:'4326',
@@ -3172,6 +3178,7 @@ const SIGHTING_FIELD_CANDIDATES = {
   coordinateUncertaintyM: ['coordinateUncertaintyInMeters','coordinateUncertaintyInMetres','CoordinateUncertaintyInMetres','accuracy'],
   conservationStatusState: ['stateConservation','tscStatus','TSCStatus','conservationStatusState'],
   conservationStatusCth: ['countryConservation','epbcStatus','EPBCStatus','conservationStatusCwlth'],
+  recordStatus: ['recordStatus','RecordStatus','RECORDSTATUS'],
 };
 function pickSightingField(props, kind){
   for(const name of SIGHTING_FIELD_CANDIDATES[kind]){
@@ -3199,14 +3206,39 @@ function bcActQualifies(rawStateStatus){
   return s.includes('endangered') || s.includes('vulnerable');
 }
 
-// "BC Act: Endangered Population; EPBC Act: Vulnerable" style combined
-// status string for display/export — omits the "; EPBC Act: ..." half
-// when there's no Commonwealth status, or when it's just "Not Listed"
-// (a real value on this service, not an absent one), rather than showing
-// a clause that adds no information.
-function buildLegalStatusString(props){
-  const bc = pickSightingField(props, 'conservationStatusState');
-  const epbc = pickSightingField(props, 'conservationStatusCth');
+// Excludes records BioNet itself flags as not representing a genuine wild
+// occurrence — captive animals, escapees, and records marked invalid (e.g.
+// a locality that doesn't match the description) — rather than treating
+// every returned record as a real sighting. A missing/unrecognised status
+// is NOT excluded on that basis alone (most valid records may simply not
+// carry this field), so this only ever removes records positively flagged
+// as one of these three categories.
+function recordStatusExcludes(rawStatus){
+  if(!rawStatus) return false;
+  const s = String(rawStatus).toLowerCase();
+  return s.includes('invalid') || s.includes('captive') || s.includes('escape');
+}
+
+// Prefers the authoritative short-code status from BioNet's species
+// reference table (see fetchSpeciesLegalStatusLookup) over the sightings
+// layer's own simplified text, falling back to the latter when the species
+// isn't found in the lookup (e.g. the lookup fetch failed, or a genuine
+// name mismatch between the two services).
+function resolveConservationStatus(props, which, legalStatusLookup){
+  const name = pickSightingField(props, 'scientificName');
+  const authoritative = legalStatusLookup && name ? legalStatusLookup.get(name) : null;
+  if(which === 'state') return (authoritative && authoritative.stateConservation) || pickSightingField(props, 'conservationStatusState') || '';
+  return (authoritative && authoritative.countryConservation) || pickSightingField(props, 'conservationStatusCth') || '';
+}
+
+// "BC Act: E1,P; EPBC Act: V,C,J,K" style combined status string for
+// display/export — omits the "; EPBC Act: ..." half when there's no
+// Commonwealth status, or when it's just "Not Listed" (a real value on the
+// sightings layer, not an absent one), rather than showing a clause that
+// adds no information.
+function buildLegalStatusString(props, legalStatusLookup){
+  const bc = resolveConservationStatus(props, 'state', legalStatusLookup);
+  const epbc = resolveConservationStatus(props, 'country', legalStatusLookup);
   const parts = [];
   if(bc) parts.push('BC Act: ' + bc);
   if(epbc && !/^not listed$/i.test(String(epbc).trim())) parts.push('EPBC Act: ' + epbc);
@@ -3281,33 +3313,76 @@ function pointWithinPolygon(feature, polygon){
   }catch(e){ return false; }
 }
 
-// polygonToLine() returns a single LineString Feature for a Polygon, but a
-// FeatureCollection of one LineString per part for a MultiPolygon (e.g. a
-// multi-part uploaded boundary) — normalise both to an array of line
-// features so distance can be measured against every part.
-function boundaryLineFeatures(geom){
-  const result = turf.polygonToLine(turf.feature(geom));
-  return result.type === 'FeatureCollection' ? result.features : [result];
+// turf's pointToLineDistance works on WGS84 lat/lon directly — a spherical
+// approximation that was landing 1-10m off a proper GIS distance column on
+// real comparisons, both over and under. A government GIS distance is
+// normally computed after reprojecting into a local projected CRS (for NSW,
+// GDA2020 MGA — a standard UTM zone), which for an area this small is far
+// more accurate than a general-purpose spherical calculation. Reprojecting
+// here and measuring in plain planar metres matches that convention far
+// more closely than turf's spherical distance did.
+// Standard Snyder transverse-Mercator forward formulas (the basis of both
+// UTM and MGA); WGS84 and GDA2020 differ by centimetres, well under the
+// metre-level precision distances are reported at here.
+function latLonToUTM(lat, lon, zone){
+  const a = 6378137.0, f = 1/298.257223563, k0 = 0.9996;
+  const e2 = f*(2-f), ep2 = e2/(1-e2);
+  const lon0 = (zone-1)*6 - 180 + 3;
+  const latRad = lat*Math.PI/180, lonRad = lon*Math.PI/180, lon0Rad = lon0*Math.PI/180;
+  const N = a/Math.sqrt(1 - e2*Math.sin(latRad)**2);
+  const T = Math.tan(latRad)**2;
+  const C = ep2*Math.cos(latRad)**2;
+  const A = Math.cos(latRad)*(lonRad-lon0Rad);
+  const M = a*((1 - e2/4 - 3*e2**2/64 - 5*e2**3/256)*latRad
+    - (3*e2/8 + 3*e2**2/32 + 45*e2**3/1024)*Math.sin(2*latRad)
+    + (15*e2**2/256 + 45*e2**3/1024)*Math.sin(4*latRad)
+    - (35*e2**3/3072)*Math.sin(6*latRad));
+  const x = k0*N*(A + (1-T+C)*A**3/6 + (5-18*T+T**2+72*C-58*ep2)*A**5/120) + 500000;
+  let y = k0*(M + N*Math.tan(latRad)*(A**2/2 + (5-T+9*C+4*C**2)*A**4/24 + (61-58*T+T**2+600*C-330*ep2)*A**6/720));
+  if(lat < 0) y += 10000000; // southern hemisphere false northing
+  return { x, y };
+}
+function utmZoneFor(lon){ return Math.floor((lon + 180) / 6) + 1; }
+
+function pointToSegmentDistance(px, py, x1, y1, x2, y2){
+  const dx = x2-x1, dy = y2-y1;
+  const lenSq = dx*dx + dy*dy;
+  let t = lenSq === 0 ? 0 : ((px-x1)*dx + (py-y1)*dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1+t*dx), py - (y1+t*dy));
+}
+
+// Reprojects every ring of the (possibly multi-part) boundary into UTM once
+// per fetch, using the zone the site itself falls in — a 5km buffer is far
+// smaller than a UTM zone's ~667km width at this latitude, so every sighting
+// point safely reprojects into that same zone alongside it.
+function prepareSiteUtm(geom){
+  const rings = geom.type === 'MultiPolygon' ? geom.coordinates.flat() : geom.coordinates;
+  const zone = utmZoneFor(rings[0][0][0]);
+  const utmRings = rings.map(ring => ring.map(([lon,lat]) => latLonToUTM(lat, lon, zone)));
+  return { zone, utmRings };
 }
 
 // Straight-line distance from a sighting point to the subject site boundary,
 // in metres — 0 if the point falls within the boundary itself, otherwise the
-// distance to the nearest edge (checked against every part of a multi-part
-// boundary). Returns null if the geometry is missing/unusable rather than
-// throwing, so one bad record doesn't fail the whole fetch.
-function distanceFromSiteMeters(feature, siteLines){
+// planar distance to the nearest edge segment (checked against every part of
+// a multi-part boundary). Returns null if the geometry is missing/unusable
+// rather than throwing, so one bad record doesn't fail the whole fetch.
+function distanceFromSiteMeters(feature, siteUtm){
   try{
     const g = feature.geometry;
     if(!g) return null;
     const coords = g.type === 'MultiPoint' ? g.coordinates[0] : g.coordinates;
-    const pt = turf.point(coords);
-    if(turf.booleanPointInPolygon(pt, turf.feature(boundaryGeom))) return 0;
-    let minKm = Infinity;
-    siteLines.forEach(line=>{
-      const d = turf.pointToLineDistance(pt, line, { units:'kilometers' });
-      if(d < minKm) minKm = d;
+    if(turf.booleanPointInPolygon(turf.point(coords), turf.feature(boundaryGeom))) return 0;
+    const p = latLonToUTM(coords[1], coords[0], siteUtm.zone);
+    let minDist = Infinity;
+    siteUtm.utmRings.forEach(ring=>{
+      for(let i=0; i<ring.length-1; i++){
+        const d = pointToSegmentDistance(p.x, p.y, ring[i].x, ring[i].y, ring[i+1].x, ring[i+1].y);
+        if(d < minDist) minDist = d;
+      }
     });
-    return minKm === Infinity ? null : minKm * 1000;
+    return minDist === Infinity ? null : minDist;
   }catch(e){ return null; }
 }
 
@@ -3328,10 +3403,46 @@ function formatSightingDate(raw){
     return isNaN(d.getTime()) ? null : d.toISOString().slice(0,10);
   }
   const s = String(raw);
+  // A date range ("2022-07-22/2022-09-14") records observation-window
+  // uncertainty, not two separate events. Confirmed against a reference
+  // export: the department's own convention reports the END date (the
+  // later, more conservative bound of the window) — using the start date
+  // instead made every ranged record's date look too early.
+  const rangeMatch = s.match(/^\d{4}-\d{2}-\d{2}\/(\d{4}-\d{2}-\d{2})/);
+  if(rangeMatch) return rangeMatch[1];
   const isoMatch = s.match(/^\d{4}-\d{2}-\d{2}/);
   if(isoMatch) return isoMatch[0];
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d.toISOString().slice(0,10);
+}
+
+// ArcGIS SQL WHERE clause matching the same rule as bcActQualifies() —
+// pushed server-side so the ID query itself only returns qualifying
+// records, instead of every sighting of every species in the buffer. That
+// matters beyond just efficiency: a busy urban 5km buffer can genuinely
+// hold more than the 20,000-ID safety cap (queryLayerByIds) across ALL
+// species, and truncating THAT list was silently dropping records —
+// disproportionately recent ones, since higher OBJECTIDs sort last. Filtering
+// down to just the ~1-2% of records that are actually threatened keeps the
+// ID list well under any realistic cap. If this specific ArcGIS backend
+// rejects the clause for any reason, the caller falls back to fetching
+// everything and filtering client-side instead of failing outright.
+const SIGHTINGS_QUALIFYING_WHERE = "(UPPER(stateConservation) LIKE '%ENDANGERED%' OR UPPER(stateConservation) LIKE '%VULNERABLE%')";
+
+// The Atlas sightings layer's own stateConservation/countryConservation
+// fields are a simplified display string ("Endangered Population") that
+// drops the finer BC Act/EPBC Act codes (general protection "P", schedule
+// references, and CAMBA/JAMBA/ROKAMBA migratory-treaty codes C/J/K) —
+// confirmed by comparing against a reference export that kept them. The
+// authoritative short-code versions live on BioNet's own species reference
+// table (the same one "Fetch threatened species list" already uses), keyed
+// by scientific name — fetched once per sightings run and preferred over
+// the sightings layer's lossy copy wherever a match exists.
+async function fetchSpeciesLegalStatusLookup(){
+  const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','stateConservation','countryConservation']);
+  const map = new Map();
+  rows.forEach(r=>{ if(r.scientificName) map.set(r.scientificName, { stateConservation: r.stateConservation, countryConservation: r.countryConservation }); });
+  return map;
 }
 
 async function fetchSpeciesSightingsForSite(){
@@ -3343,15 +3454,24 @@ async function fetchSpeciesSightingsForSite(){
   resetClassSymbols();
 
   try{
-    const lyr = { name:'BioNet Species Sightings', url: BIONET_SIGHTINGS_URL, id: BIONET_SIGHTINGS_LAYER_ID };
-    const gj = await queryLayer(lyr);
+    let gj;
+    try{
+      gj = await queryLayer({ name:'BioNet Species Sightings', url: BIONET_SIGHTINGS_URL, id: BIONET_SIGHTINGS_LAYER_ID, where: SIGHTINGS_QUALIFYING_WHERE });
+    }catch(whereErr){
+      console.warn('Server-side BC Act filter failed on this ArcGIS service, falling back to fetching everything and filtering client-side.', whereErr);
+      gj = await queryLayer({ name:'BioNet Species Sightings', url: BIONET_SIGHTINGS_URL, id: BIONET_SIGHTINGS_LAYER_ID });
+    }
     const allRecords = gj.features || [];
 
-    // Only records whose BC Act status actually makes them "threatened" —
-    // see bcActQualifies() above. Everything else (protection-only "P"
-    // records, or records with no state conservation status at all) is
-    // dropped before anything downstream ever sees it.
-    const records = allRecords.filter(f => bcActQualifies(pickSightingField(f.properties||{}, 'conservationStatusState')));
+    // The server-side WHERE clause should have already done this, but the
+    // fallback path above hasn't, and applying it again here is free — so
+    // it's always applied regardless of which path ran. recordStatusExcludes
+    // additionally drops captive/escapee/invalid records the server-side
+    // clause doesn't know about.
+    const records = allRecords.filter(f=>{
+      const props = f.properties || {};
+      return bcActQualifies(pickSightingField(props, 'conservationStatusState')) && !recordStatusExcludes(pickSightingField(props, 'recordStatus'));
+    });
     const excludedCount = allRecords.length - records.length;
 
     // Every single raw record excluded means pickSightingField() almost
@@ -3371,8 +3491,8 @@ async function fetchSpeciesSightingsForSite(){
       return;
     }
 
-    const siteLines = boundaryLineFeatures(boundaryGeom);
-    records.forEach(f=>{ f._distanceM = distanceFromSiteMeters(f, siteLines); });
+    const siteUtm = prepareSiteUtm(boundaryGeom);
+    records.forEach(f=>{ f._distanceM = distanceFromSiteMeters(f, siteUtm); });
 
     const withinSite = records.filter(f => pointWithinPolygon(f, boundaryGeom));
     const withinSiteSet = new Set(withinSite);
@@ -3392,13 +3512,19 @@ async function fetchSpeciesSightingsForSite(){
       countByClass.set(className, (countByClass.get(className) || 0) + 1);
     });
 
-    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, truncated: !!gj.truncated };
+    // Non-fatal if this fails — exports fall back to the sightings layer's
+    // own (less complete) status fields rather than losing the whole result.
+    let legalStatusLookup = new Map();
+    try{ legalStatusLookup = await fetchSpeciesLegalStatusLookup(); }
+    catch(lookupErr){ console.warn('Could not fetch the authoritative BioNet species status table — Legal Status will fall back to the sightings layer\'s own simplified field.', lookupErr); }
+
+    window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, legalStatusLookup, truncated: !!gj.truncated };
     // Symbols assigned in descending order of frequency, so the most common
     // classes on this site get the most visually distinct shape/colour.
     [...countByClass.entries()].sort((a,b)=> b[1]-a[1]).forEach(([k])=> classSymbolFor(k));
     renderSightingsOnMap(records);
     renderSpeciesSightingsResult(window.sightingsResult);
-    statusEl.innerHTML = `<span class="ok">Found ${records.length} threatened sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself (${excludedCount} record(s) excluded — no qualifying BC Act status).</span>` +
+    statusEl.innerHTML = `<span class="ok">Found ${records.length} threatened sighting record(s) across ${countByName.size} species within the ${ASSESSMENT_BUFFER_KM}km buffer — ${withinSite.length} within the subject site boundary itself (${excludedCount} record(s) excluded — no qualifying BC Act status, or flagged captive/escapee/invalid).</span>` +
       (gj.truncated ? '<br><span class="err">Result truncated at the server\'s record cap — export may be incomplete.</span>' : '');
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
@@ -3512,7 +3638,7 @@ function exportSpeciesSightings(result){
   const rows = [
     ['THREATENED SPECIES SIGHTING RECORDS (BioNet Atlas — live query, ' + ASSESSMENT_BUFFER_KM + 'km assessment buffer)'],
     ['Generated', new Date().toLocaleString()],
-    [`Note: only records whose NSW (BC Act) state conservation status names Endangered (species or population), Critically Endangered, or Vulnerable are included (${result.excludedCount} non-qualifying record(s) excluded — general BC Act protection alone doesn't qualify). Friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn't match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Class, matching the symbol/colour used on the map.`],
+    [`Note: only records whose NSW (BC Act) state conservation status names Endangered (species or population), Critically Endangered, or Vulnerable are included, with captive/escapee/invalid records also excluded (${result.excludedCount} record(s) excluded in total). State/Commonwealth Conservation Status prefer BioNet's own authoritative species reference table (full codes, e.g. "E1,P"/"V,C,J,K") over the sightings layer's own simplified text, falling back to it only if a species isn't found in that table. Friendly columns on the left are matched against several possible BioNet field-name spellings; every field the service actually returned is also included as-is further right so nothing is lost if a name doesn't match. Coordinates for some sensitive threatened species may be generalised by BioNet, not exact. Rows are grouped by Class, matching the symbol/colour used on the map.`],
     [],
     headerRow
   ];
@@ -3526,7 +3652,11 @@ function exportSpeciesSightings(result){
       const coords = f.geometry.type === 'MultiPoint' ? f.geometry.coordinates[0] : f.geometry.coordinates;
       if(Array.isArray(coords)){ lon = coords[0]; lat = coords[1]; }
     }
-    const friendlyVals = SIGHTINGS_FRIENDLY_COLUMNS.map(c => pickSightingField(props, c.kind) || '');
+    const friendlyVals = SIGHTINGS_FRIENDLY_COLUMNS.map(c => {
+      if(c.kind === 'conservationStatusState') return resolveConservationStatus(props, 'state', result.legalStatusLookup);
+      if(c.kind === 'conservationStatusCth') return resolveConservationStatus(props, 'country', result.legalStatusLookup);
+      return pickSightingField(props, c.kind) || '';
+    });
     const rawVals = rawFieldNames.map(k => props[k] != null ? props[k] : '');
     rows.push([withinSite, f._distanceM != null ? Math.round(f._distanceM) : '', ...friendlyVals, lon, lat, ...rawVals]);
   });
@@ -3575,7 +3705,7 @@ function kingdomBucket(rawKingdom){
 // and its distance — exactly the three summary figures the house template
 // reports per species, computed from every qualifying record for that
 // species rather than re-fetched.
-function aggregateSightingsBySpecies(records){
+function aggregateSightingsBySpecies(records, legalStatusLookup){
   const bySpecies = new Map();
   records.forEach(f=>{
     const props = f.properties || {};
@@ -3587,7 +3717,7 @@ function aggregateSightingsBySpecies(records){
         commonName: pickSightingField(props, 'commonName') || '',
         kingdom: kingdomBucket(pickSightingField(props, 'kingdom')),
         class: pickSightingField(props, 'class') || 'Unknown',
-        legalStatus: buildLegalStatusString(props),
+        legalStatus: buildLegalStatusString(props, legalStatusLookup),
         recs: []
       });
     }
@@ -3667,7 +3797,7 @@ async function exportSpeciesSightingsDocx(result){
   if(typeof docx === 'undefined'){ alert('The Word export library did not load — check network access to jsdelivr.'); return; }
   const { Document, Packer, Paragraph, TextRun } = docx;
 
-  const species = aggregateSightingsBySpecies(result.records);
+  const species = aggregateSightingsBySpecies(result.records, result.legalStatusLookup);
   const kingdoms = {};
   species.forEach(row=>{
     (kingdoms[row.Kingdom] ??= {});
