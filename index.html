@@ -23,6 +23,11 @@
      refuse to execute it (blocked by the nosniff header) — .iife.js is the
      same code, built for exactly this plain-<script>-tag use case. -->
 <script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.iife.js"></script>
+<!-- docx/watermarks: a separate sub-bundle (not part of the main docx build
+     above) exposing ImageWatermark/TextWatermark as a global `docxWatermarks`
+     — it must load after the main docx script since it references that
+     global directly rather than bundling its own copy. -->
+<script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/watermarks.iife.js"></script>
 <style>
   :root{
     --ink:#1E2A24;
@@ -3691,6 +3696,13 @@ const DOCX_HEADER_LABELS = ['Scientific Name', 'Common Name', 'Legal Status', 'N
 const DOCX_COL_WIDTHS = [2200, 2200, 1500, 1100, 1700, 1700]; // DXA, sums to 10400
 const DOCX_TABLE_WIDTH = DOCX_COL_WIDTHS.reduce((a,b)=>a+b, 0);
 
+// GroundPatch logo watermark, embedded inline (200x200 JPEG, ~2KB base64) so
+// the export stays a single self-contained file with no extra network
+// request. docx's own ImageWatermark (from the separate docxWatermarks
+// bundle above) renders this centred behind the page text on every page,
+// exactly like Word's own Design > Watermark command.
+const DOCX_WATERMARK_JPEG_BASE64 = 'data:image/jpeg;base64,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';
+
 // Animalia/Plantae -> Fauna/Flora (matching the house template's grouping
 // labels); anything else (Fungi, Chromista, ...) keeps its own raw kingdom
 // name as its own bucket rather than being silently dropped.
@@ -3795,7 +3807,9 @@ function docxBuildTable(bannerText, rows){
 
 async function exportSpeciesSightingsDocx(result){
   if(typeof docx === 'undefined'){ alert('The Word export library did not load — check network access to jsdelivr.'); return; }
-  const { Document, Packer, Paragraph, TextRun } = docx;
+  if(typeof docxWatermarks === 'undefined'){ alert('The Word watermark library did not load — check network access to jsdelivr.'); return; }
+  const { Document, Packer, Paragraph, TextRun, Header } = docx;
+  const { ImageWatermark } = docxWatermarks;
 
   const species = aggregateSightingsBySpecies(result.records, result.legalStatusLookup);
   const kingdoms = {};
@@ -3848,6 +3862,17 @@ async function exportSpeciesSightingsDocx(result){
           orientation: 'landscape',
           margin: { top:720, bottom:720, left:720, right:720 },
         },
+      },
+      headers: {
+        default: new Header({
+          children: [new Paragraph({
+            children: [new ImageWatermark({
+              type: 'jpg',
+              data: DOCX_WATERMARK_JPEG_BASE64,
+              transformation: { width: 300, height: 300 },
+            })],
+          })],
+        }),
       },
       children,
     }],
