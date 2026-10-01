@@ -2852,13 +2852,31 @@ const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
 // what's asked for and returns either {d:{results,__next}} (verbose) or
 // {value, "@odata.nextLink"} depending on how it's configured — handle
 // both shapes and follow pagination until exhausted.
-async function fetchBioNetODataAll(entitySet, selectFields){
-  let url = `${BIONET_ODATA_BASE}/${entitySet}?$select=${selectFields.join(',')}&$format=json`;
+// 20s cap per page — fetch() has no timeout of its own, so a stalled
+// request to BioNet or the proxy would otherwise hang the whole await
+// forever with no error and no feedback, which is exactly what "the page
+// looks frozen" looks like from the outside.
+async function fetchWithTimeout(url, timeoutMs = 20000){
+  const controller = new AbortController();
+  const timer = setTimeout(()=> controller.abort(), timeoutMs);
+  try{
+    return await fetch(url, { signal: controller.signal });
+  }catch(e){
+    if(e.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs/1000}s: ${url}`);
+    throw e;
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+async function fetchBioNetODataAll(entitySet, selectFields, filter){
+  let url = `${BIONET_ODATA_BASE}/${entitySet}?$select=${selectFields.join(',')}&$format=json`
+    + (filter ? `&$filter=${encodeURIComponent(filter)}` : '');
   const rows = [];
   let guard = 0;
   while(url && guard < 50){
     guard++;
-    const resp = await fetch(withProxy(url));
+    const resp = await fetchWithTimeout(withProxy(url));
     if(!resp.ok) throw new Error(`BioNet ${entitySet} query failed: HTTP ${resp.status}`);
     const json = await resp.json();
     const batch = json.value || (json.d && json.d.results) || [];
@@ -3438,11 +3456,39 @@ const SIGHTINGS_QUALIFYING_WHERE = "(UPPER(stateConservation) LIKE '%ENDANGERED%
 // table (the same one "Fetch threatened species list" already uses), keyed
 // by scientific name — fetched once per sightings run and preferred over
 // the sightings layer's lossy copy wherever a match exists.
+// Deliberately narrow (3 short fields) and unfiltered — this is fetched
+// for every "Fetch species sightings" click, and a site's records can span
+// any of NSW's ~1300+ listed species, so there's no small filter to scope
+// it to. habitatAndEcology is NOT selected here on purpose: that field
+// holds a full narrative per species, and pulling it for the entire
+// state-wide table on every click (instead of just the species a site
+// actually turned up) made this query dramatically heavier — enough to
+// look like the page had frozen. See fetchHabitatAndEcologyFor below.
 async function fetchSpeciesLegalStatusLookup(){
-  const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','stateConservation','countryConservation','habitatAndEcology','profileID']);
+  const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','stateConservation','countryConservation']);
   const map = new Map();
-  rows.forEach(r=>{ if(r.scientificName) map.set(r.scientificName, { stateConservation: r.stateConservation, countryConservation: r.countryConservation, habitatAndEcology: r.habitatAndEcology, profileID: r.profileID }); });
+  rows.forEach(r=>{ if(r.scientificName) map.set(r.scientificName, { stateConservation: r.stateConservation, countryConservation: r.countryConservation }); });
   return map;
+}
+
+// Habitat text (and the profile URL id) for only the species a given site's
+// query actually returned, not the whole state-wide table — a handful of
+// $filter'd requests instead of paginating through ~1300+ full narrative
+// records every time. Merges straight into an existing legal-status lookup
+// Map so habitatDescriptionFor() doesn't need to know there were two fetches.
+async function fetchHabitatAndEcologyFor(scientificNames, legalStatusLookup){
+  const names = [...new Set(scientificNames)].filter(Boolean);
+  const BATCH_SIZE = 20; // keeps each $filter URL comfortably short
+  for(let i = 0; i < names.length; i += BATCH_SIZE){
+    const batch = names.slice(i, i + BATCH_SIZE);
+    const filter = batch.map(n => `scientificName eq '${n.replace(/'/g, "''")}'`).join(' or ');
+    const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','habitatAndEcology','profileID'], filter);
+    rows.forEach(r=>{
+      if(!r.scientificName) return;
+      const existing = legalStatusLookup.get(r.scientificName) || {};
+      legalStatusLookup.set(r.scientificName, { ...existing, habitatAndEcology: r.habitatAndEcology, profileID: r.profileID });
+    });
+  }
 }
 
 // habitatAndEcology comes back as a flat run of bullet points glued
@@ -3551,6 +3597,13 @@ async function fetchSpeciesSightingsForSite(){
     let legalStatusLookup = new Map();
     try{ legalStatusLookup = await fetchSpeciesLegalStatusLookup(); }
     catch(lookupErr){ console.warn('Could not fetch the authoritative BioNet species status table — Legal Status will fall back to the sightings layer\'s own simplified field.', lookupErr); }
+
+    // Also non-fatal, and scoped to just the species this site actually
+    // turned up (see fetchHabitatAndEcologyFor) rather than every listed
+    // species statewide — Habitat Description just comes back blank for
+    // these records if it fails.
+    try{ await fetchHabitatAndEcologyFor([...countByName.keys()], legalStatusLookup); }
+    catch(habitatErr){ console.warn('Could not fetch habitat descriptions from BioNet — Habitat Description will be left blank.', habitatErr); }
 
     window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, legalStatusLookup, truncated: !!gj.truncated };
     // Symbols assigned in descending order of frequency, so the most common
