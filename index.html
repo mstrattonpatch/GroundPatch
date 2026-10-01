@@ -130,6 +130,13 @@
     border-color:var(--moss);
     color:var(--ink);
   }
+  .buffer-control{ margin-bottom:10px; }
+  .buffer-control label{ font-size:12px; color:var(--ink); display:block; margin-bottom:4px; }
+  .buffer-control input[type=range]{
+    width:100%; accent-color:var(--moss); cursor:pointer; margin:2px 0;
+  }
+  .buffer-control-hint{ font-size:10.5px; color:var(--ink-soft); margin-top:2px; }
+  .buffer-control-hint .ok{ color:var(--moss); }
   #dropzone strong{ color:var(--ink); font-weight:600; }
   #fileStatus{
     margin-top:8px;
@@ -626,6 +633,11 @@
 
     <section>
       <h2>Project boundary</h2>
+      <div class="buffer-control">
+        <label for="assessmentBufferSlider">Assessment buffer: <strong id="assessmentBufferValue">5km</strong></label>
+        <input type="range" id="assessmentBufferSlider" min="0.5" max="5" step="0.5" value="5">
+        <div class="buffer-control-hint" id="assessmentBufferHint">Sets the ecology/planning buffer size — applies when the boundary is next loaded.</div>
+      </div>
       <div id="dropzone">
         <div><strong>Click to upload</strong> or drag a file here</div>
         <div style="margin-top:4px;">.geojson · .json · .kml · .zip (shapefile)</div>
@@ -851,7 +863,9 @@ let assessmentGeom = null; // 5km rounded buffer — used for querying/clipping 
 let assessmentLayer = null;
 let contextGeom = null;    // 300m rounded buffer — used for context-only layers (e.g. cadastre)
 let contextLayer = null;
-const ASSESSMENT_BUFFER_KM = 5;
+// Mutable (not const) — user-adjustable via the assessment buffer slider,
+// see wireAssessmentBufferSlider() below.
+let ASSESSMENT_BUFFER_KM = 5;
 const CONTEXT_BUFFER_KM = 0.5;
 function bufferGeomFor(lyr){ return lyr.bufferKm === CONTEXT_BUFFER_KM ? contextGeom : assessmentGeom; }
 
@@ -1396,6 +1410,22 @@ addressInput.addEventListener('keydown', e=>{
   if(e.key === 'Escape') suggestBox.classList.remove('show');
 });
 
+// Regenerates just the ecology/planning assessment buffer (not the
+// boundary or the fixed context buffer) around the current boundaryGeom —
+// shared by loadGeometry() and the buffer-size slider, so changing the
+// slider on an already-loaded site updates the buffer immediately instead
+// of only taking effect on the next upload.
+function updateAssessmentBuffer(fitBounds){
+  const buffer5 = turf.buffer(turf.feature(boundaryGeom), ASSESSMENT_BUFFER_KM, { units:'kilometers', steps:32 });
+  assessmentGeom = buffer5.geometry;
+  if(assessmentLayer) map.removeLayer(assessmentLayer);
+  assessmentLayer = L.geoJSON(assessmentGeom, {
+    style:{ color:'#000000', weight:1.5, fill:false }
+  }).addTo(map);
+  assessmentLayer.bindTooltip(ASSESSMENT_BUFFER_KM + 'km assessment buffer', { sticky:true });
+  if(fitBounds) map.fitBounds(assessmentLayer.getBounds(), { padding:[20,20] });
+}
+
 function loadGeometry(geom, filename){
   boundaryGeom = geom;
   if(boundaryLayer) map.removeLayer(boundaryLayer);
@@ -1405,14 +1435,9 @@ function loadGeometry(geom, filename){
   }).addTo(map);
   boundaryLayer.bindTooltip('Subject Site', { sticky:true });
 
-  // Two rounded buffers: 5km for ecology layers, 300m for context-only layers (cadastre)
-  const buffer5 = turf.buffer(turf.feature(geom), ASSESSMENT_BUFFER_KM, { units:'kilometers', steps:32 });
-  assessmentGeom = buffer5.geometry;
-  if(assessmentLayer) map.removeLayer(assessmentLayer);
-  assessmentLayer = L.geoJSON(assessmentGeom, {
-    style:{ color:'#000000', weight:1.5, fill:false }
-  }).addTo(map);
-  assessmentLayer.bindTooltip(ASSESSMENT_BUFFER_KM + 'km assessment buffer', { sticky:true });
+  // Two rounded buffers: the user-adjustable assessment buffer for ecology
+  // layers, and a fixed 500m buffer for context-only layers (cadastre).
+  updateAssessmentBuffer(true);
 
   const bufferC = turf.buffer(turf.feature(geom), CONTEXT_BUFFER_KM, { units:'kilometers', steps:32 });
   contextGeom = bufferC.geometry;
@@ -1422,12 +1447,31 @@ function loadGeometry(geom, filename){
   }).addTo(map);
   contextLayer.bindTooltip((CONTEXT_BUFFER_KM*1000) + 'm context buffer (cadastre)', { sticky:true });
 
-  map.fitBounds(assessmentLayer.getBounds(), { padding:[20,20] });
-
   const ha = polygonAreaHa(geom);
   fileStatus.innerHTML = `<span class="ok">Loaded ${filename} — approx. ${ha.toFixed(2)} ha, ${ASSESSMENT_BUFFER_KM}km + ${CONTEXT_BUFFER_KM*1000}m buffers created</span>`;
   document.getElementById('runQuery').disabled = false;
 }
+
+function formatBufferKm(km){
+  return km < 1 ? Math.round(km*1000) + 'm' : (Number.isInteger(km) ? km : km.toFixed(1)) + 'km';
+}
+
+function wireAssessmentBufferSlider(){
+  const slider = document.getElementById('assessmentBufferSlider');
+  const valueEl = document.getElementById('assessmentBufferValue');
+  const hintEl = document.getElementById('assessmentBufferHint');
+  slider.addEventListener('input', ()=>{
+    ASSESSMENT_BUFFER_KM = Number(slider.value);
+    valueEl.textContent = formatBufferKm(ASSESSMENT_BUFFER_KM);
+    if(boundaryGeom){
+      updateAssessmentBuffer(true);
+      hintEl.innerHTML = `<span class="ok">Buffer updated to ${formatBufferKm(ASSESSMENT_BUFFER_KM)} — click "Fetch site data" again to re-query layers against it.</span>`;
+    } else {
+      hintEl.textContent = 'Sets the ecology/planning buffer size — applies when the boundary is next loaded.';
+    }
+  });
+}
+wireAssessmentBufferSlider();
 
 /* =========================================================
    Area calc — equirectangular projection, shoelace formula.
