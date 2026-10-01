@@ -1792,7 +1792,16 @@ function clipFeatureToBuffer(feature, bufferGeom){
   try{
     if(gtype === 'Polygon' || gtype === 'MultiPolygon'){
       const clipped = turf.intersect(turf.feature(feature.geometry), bufferFeature);
-      if(!clipped) return null;
+      if(!clipped){
+        // turf.intersect's polygon-clipping can return a false-negative null
+        // on complex, vertex-dense real-world polygons (seen with government
+        // datasets like SVTM's vegetation layer, especially against the
+        // many-vertex rounded buffer ring) even when the shapes genuinely
+        // overlap. booleanIntersects uses a different, more robust test as a
+        // safety net - if it disagrees with intersect's null, keep the
+        // unclipped feature rather than silently dropping a real match.
+        return turf.booleanIntersects(feature, bufferFeature) ? feature : null;
+      }
       return { type:'Feature', properties: feature.properties, geometry: clipped.geometry };
     }
     if(gtype === 'LineString' || gtype === 'MultiLineString'){
