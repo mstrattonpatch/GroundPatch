@@ -137,6 +137,11 @@
   }
   .buffer-control-hint{ font-size:10.5px; color:var(--ink-soft); margin-top:2px; }
   .buffer-control-hint .ok{ color:var(--moss); }
+  .lot-search-hint{
+    font-size:11px; line-height:1.5; color:#7A5200;
+    background:var(--amber-soft); border:1px solid var(--amber);
+    border-radius:3px; padding:6px 8px; margin:-2px 0 6px;
+  }
   #dropzone strong{ color:var(--ink); font-weight:600; }
   #fileStatus{
     margin-top:8px;
@@ -657,7 +662,7 @@
         </div>
         <div id="addressSuggestions"></div>
       </div>
-      <div id="lotSearchHint" style="display:none;font-size:11px;color:var(--ink-soft);margin:-2px 0 6px;line-height:1.4;">Tip: a plan number on its own (e.g. DP709613) searches every lot on that plan and is noticeably slower — include the lot number too (e.g. 1/DP709613) for a much faster, indexed search.</div>
+      <div id="lotSearchHint" class="lot-search-hint" style="display:none;">A plan number on its own (e.g. DP709613) forces a slow, unindexed search across every lot in NSW and can take up to a minute, or time out — add the lot number too (e.g. <strong>1/DP709613</strong>) for a near-instant, indexed search instead.</div>
       <button class="secondary" id="runAddressSearch">Search</button>
       <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
     </section>
@@ -1336,7 +1341,14 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
     loadGeometry(geom, label);
     statusEl.innerHTML += `<span class="ok">Loaded: ${label}</span>`;
   }catch(err){
-    statusEl.innerHTML = `<span class="err">${err.message}</span>${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
+    // A bare plan number timing out looks identical to any other failure
+    // unless it's called out specifically — this is the one failure mode
+    // with an actual fix (add the lot number), not just "try again".
+    const isSlowPathTimeout = isBarePlanNumber(query) && /timed out/i.test(err.message);
+    const tip = isSlowPathTimeout
+      ? `<div style="margin-top:4px;">This is the slow, unindexed plan-only search timing out, not a dead search — if you know the lot number, searching "&lt;lot&gt;/${query.toUpperCase()}" instead (e.g. 1/${query.toUpperCase()}) will be near-instant.</div>`
+      : '';
+    statusEl.innerHTML = `<span class="err">${err.message}</span>${tip}${err.requestUrl ? `<div style="margin-top:4px;word-break:break-all;font-family:'IBM Plex Mono', monospace;font-size:10px;color:var(--ink-soft);">${err.requestUrl}</div>` : ''}`;
   }finally{
     clearInterval(tickTimer);
     btn.disabled = false; btn.textContent = original;
