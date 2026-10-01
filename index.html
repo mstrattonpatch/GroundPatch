@@ -2865,9 +2865,6 @@ const TS_SPECIES_FIELDS = [
   'sensitivityToLoss','sensitivityToPotentialGain','sensitivityToPotentialGainForaging','sensitivityToPotentialGainBreeding',
   'SAII','SAIIBreeding','SAIIForaging','generalNotes'
 ];
-// A separate small table (species taxonomy/authority list) for the one field
-// Summary needs that ThreatenedBiodiversity_Species doesn't carry.
-const TS_SPECIESNAMES_FIELDS = ['scientificName','primaryGrowthFormGroup'];
 const CALENDAR_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // Colours lifted directly from the department's own Target List workbook
@@ -3024,12 +3021,11 @@ async function fetchThreatenedSpeciesForSite(){
   try{
     // ThreatenedBiodiversity_Species carries several large narrative text
     // fields across NSW's whole ~1300+ species table, so it's by far the
-    // slowest of these three — the only one worth showing page-by-page
+    // slowest of these two — the only one worth showing page-by-page
     // progress for.
-    const [speciesRows, geoRows, nameRows] = await Promise.all([
+    const [speciesRows, geoRows] = await Promise.all([
       fetchBioNetODataAll('ThreatenedBiodiversity_Species', TS_SPECIES_FIELDS, null, (count, page)=> progress.page(0, page)),
       fetchBioNetODataAll('ThreatenedBiodiversity_TSGeographicData', TS_GEO_FIELDS),
-      fetchBioNetODataAll('SpeciesNames', TS_SPECIESNAMES_FIELDS)
     ]);
     progress.done(0);
     progress.start(1);
@@ -3040,8 +3036,6 @@ async function fetchThreatenedSpeciesForSite(){
       if(!geoByName.has(r.scientificName)) geoByName.set(r.scientificName, new Set());
       geoByName.get(r.scientificName).add(r.IBRASubregion);
     });
-    const growthFormByName = new Map();
-    nameRows.forEach(r=>{ if(r.scientificName && r.primaryGrowthFormGroup) growthFormByName.set(r.scientificName, r.primaryGrowthFormGroup); });
 
     const sitePctSet = new Set(sitePcts);
     const siteIbraSet = new Set(siteIbra);
@@ -3058,20 +3052,7 @@ async function fetchThreatenedSpeciesForSite(){
         const ibraMatch = ibraForSpecies && [...siteIbraSet].some(i => ibraForSpecies.has(i));
         if(!ibraMatch) return;
       }
-      // "Reason for Consideration" per the Summary sheet's own hierarchy
-      // (Found during survey > Atlas record > SAII > SAII Breeding > MNES >
-      // BAM Candidate) — only SAII/SAII Breeding are things this PCT/IBRA
-      // query can actually evaluate; the rest need survey/Atlas/MNES data
-      // this tool doesn't have, so this is a partial, honest subset only.
-      let reasonForConsideration = '';
-      if(String(sp.SAII).toLowerCase() === 'true') reasonForConsideration = 'SAII';
-      else if(String(sp.SAIIBreeding).toLowerCase() === 'true') reasonForConsideration = 'SAII Breeding';
-      matches.push(Object.assign({}, sp, {
-        matchedPcts,
-        primaryGrowthFormGroup: growthFormByName.get(sp.scientificName) || '',
-        _considerationRequired: reasonForConsideration ? 'Yes' : '',
-        _reasonForConsideration: reasonForConsideration
-      }));
+      matches.push(Object.assign({}, sp, { matchedPcts }));
     });
 
     window.tsResult = { matches, sitePcts, siteIbra };
@@ -3100,59 +3081,46 @@ function renderThreatenedSpeciesResult(result){
   document.getElementById('exportTsBySpecies').addEventListener('click', ()=> exportThreatenedSpeciesBySpecies(result));
 }
 
-// Matches the FULL "Summary" sheet column layout (all 59 columns, exact
-// same order and header text) from the department's Target List workbook,
-// used by BOTH exports so the header is identical either way. Columns still
-// left blank need Atlas/MNES/survey/BAM-candidate-determination data this
-// live PCT/IBRA query genuinely doesn't have access to: Abreviation, Class,
-// Found during Survey, both Atlas Count columns, MNES, and the four BAM
-// Candidate/Predicted columns. Everything else is either a direct BioNet
-// field, a join against the SpeciesNames table (Primary Growth Form Group),
-// or computed from data already fetched (Species Code from profileID,
-// Consideration Required / Reason for Consideration from SAII/SAII Breeding
-// only — the other four reasons in the department's own hierarchy need
-// survey/Atlas/MNES data this doesn't have, so it's a partial, honest
-// subset rather than a guess).
+// Matches the "BAM Candidate and Predicted" sheet column layout (exact
+// order and header text) from the department's own TS_by_PCT_by_IBRAsub
+// workbook, used by BOTH exports so the header is identical either way.
+// The four Predicted/Candidate columns replicate that sheet's own formula
+// exactly (confirmed against its live cell formulas): classOfCredit is one
+// of "Ecosystem", "Species" or "Species/Ecosystem" (a species can carry
+// both an ecosystem credit for general/foraging habitat and a species
+// credit specifically for breeding) — "EEC/Marine" rows match none of the
+// four and are left blank in all of them, same as the reference sheet.
+// "Specific Survey Requirements" is left blank: the reference sheet looks
+// it up from a separate static BAM-C reference table (optimal survey
+// time/conditions per species) that isn't available live from BioNet, and
+// isn't embedded here.
+function classOfCreditColumn(sp, wanted){ return sp.classOfCredit === wanted ? sp.scientificName : ''; }
 const TS_SUMMARY_COLUMNS = [
-  { label:'Abreviation' },
-  { label:'Kingdom', field:'kingdom' },
-  { label:'Class' },
-  { label:'Family', field:'family' },
   { label:'Scientific Name', field:'scientificName' },
-  { label:'Species Code', compute: sp => sp.profileID != null ? String(sp.profileID) : '' },
-  { label:'Common Name', field:'vernacularName' },
-  { label:'Primary Growth Form Group', field:'primaryGrowthFormGroup' },
-  { label:'State Conservation', field:'stateConservation' },
-  { label:'Country Conservation', field:'countryConservation' },
-  { label:'Consideration Required', compute: sp => sp._considerationRequired },
-  { label:'Reason for Consideration *', color:'reasonGreen', compute: sp => sp._reasonForConsideration },
+  { label:'Kingdom', field:'kingdom' },
   { label:'Class of Credit', field:'classOfCredit' },
-  { label:'Unit of Measure', field:'unitOfMeasure' },
-  { label:'Offset Multiplier', field:'offsetMultiplier' },
-  { label:'Sensitivity to Loss', field:'sensitivityToLoss' },
-  { label:'Sensitivity to Potential Gain', field:'sensitivityToPotentialGain' },
-  { label:'Sensitivity to Potential Gain Foraging', field:'sensitivityToPotentialGainForaging' },
-  { label:'Sensitivity to Potential Gain Breeding', field:'sensitivityToPotentialGainBreeding' },
+  { label:'Predicted Species', compute: sp => classOfCreditColumn(sp, 'Ecosystem') },
+  { label:'Predicted Species (foraging)', compute: sp => classOfCreditColumn(sp, 'Species/Ecosystem') },
+  { label:'Candidate Species', compute: sp => classOfCreditColumn(sp, 'Species') },
+  { label:'Candidate Species (breeding)', compute: sp => classOfCreditColumn(sp, 'Species/Ecosystem') },
   { label:'Patch Size', field:'patchSize' },
   { label:'Native Vegetation Cover', field:'nativeVegetationCover' },
-  { label:'Associated PCT', field:'associatedPCTs', transform: v => (v || '').replace(/;/g, ', ') },
   { label:'Habitat Constraints', field:'habitatConstraints', color:'habitatOrange' },
-  { label:'Habitat Constraints Foraging', field:'habitatConstraintsForaging', color:'habitatOrangeLight' },
-  { label:'Habitat Constraints Breeding', field:'habitatConstraintsBreeding', color:'habitatOrangeLight' },
+  { label:'Habitat Constraints (Foraging)', field:'habitatConstraintsForaging', color:'habitatOrangeLight' },
+  { label:'Habitat Constraints (Breeding)', field:'habitatConstraintsBreeding', color:'habitatOrangeLight' },
   { label:'Specific Survey Requirements', color:'surveyReqGreen' },
-  { label:'Months of Survey', field:'monthsOfSurvey', color:'reasonGreen' },
+  { label:'Months Of Survey', field:'monthsOfSurvey', color:'reasonGreen' },
   ...CALENDAR_MONTHS.map(m => ({ label:m, color:'reasonGreen', month:m })),
-  { label:'Survey Comments', field:'surveyComments', color:'reasonGreen' },
-  { label:'General Notes', field:'generalNotes', color:'notesBlue' },
-  { label:'Months of Survey Foraging', field:'monthsOfSurveyForaging' },
-  { label:'Months of Survey Breeding', field:'monthsOfSurveyBreeding' },
+  { label:'Months Of Survey (Foraging)', field:'monthsOfSurveyForaging' },
+  { label:'Months Of Survey (Breeding)', field:'monthsOfSurveyBreeding' },
   { label:'Occupy Paddock Trees', field:'occupyPaddockTrees', valueColored:true },
-  { label:'Occupy Paddock Trees Comment', field:'occupyPaddockTreesComment' },
-  { label:'Geographic Distribution', field:'geographicDistribution' },
+  { label:'Unit of Measure', field:'unitOfMeasure' },
   { label:'SAII', field:'SAII', color:'saiiGold' },
-  { label:'SAIIBreeding', field:'SAIIBreeding' },
-  { label:'SAIIForaging', field:'SAIIForaging' },
-  { label:'Level of Biodiversity Concern', field:'levelOfBiodiversityConcern' },
+  { label:'SAII Breeding', field:'SAIIBreeding' },
+  { label:'SAII Foraging', field:'SAIIForaging' },
+  { label:'Sensitivity To Loss', field:'sensitivityToLoss' },
+  { label:'Sensitivity To Potential Gain', field:'sensitivityToPotentialGain' },
+  { label:'General Notes', field:'generalNotes', color:'notesBlue' },
 ];
 
 // Excel's own built-in "Good/Bad/Neutral" cell-style colours for Yes/No/N-A,
@@ -3203,7 +3171,7 @@ function buildThreatenedSpeciesSheet(matches, title, result){
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: Abreviation and Class are left blank — this is a PCT/IBRA screening list, not a full BAM assessment. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
+    ['Note: this is a PCT/IBRA screening candidate list only — habitat constraints, native vegetation cover and patch size (BAM 2020 s.5.2.2) still need manual review. Specific Survey Requirements is left blank — it needs a separate BAM-C reference table this tool doesn\'t have live access to.'],
     [],
     TS_SUMMARY_COLUMNS.map(c => c.label)
   ];
