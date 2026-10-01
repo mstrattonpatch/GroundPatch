@@ -2832,7 +2832,6 @@ const CALENDAR_MONTHS = ['January','February','March','April','May','June','July
 // header cell's tint applied, so these match the exact swatches Excel shows
 // as e.g. "Green, Accent 6, Lighter 80%" in that sheet.
 const TS_COLORS = {
-  bamScreening: 'FFC000',  // "BAM Candidate/Predicted" family — needs full BAM assessment, not just PCT/IBRA
   reasonGreen: 'E2EFDA',   // "Reason for Consideration", "Months of Survey" block, "Survey Comments"
   habitatOrange: 'F8CBAD', // "Habitat Constraints"
   habitatOrangeLight: 'FBE5D6', // "Habitat Constraints (Foraging/Breeding)"
@@ -3083,15 +3082,6 @@ const TS_SUMMARY_COLUMNS = [
   { label:'Country Conservation', field:'countryConservation' },
   { label:'Consideration Required', compute: sp => sp._considerationRequired },
   { label:'Reason for Consideration *', color:'reasonGreen', compute: sp => sp._reasonForConsideration },
-  { label:'Found during Survey', color:'bamScreening' },
-  { label:'Atlas Count (Impact)', color:'bamScreening', compute: sp => atlasCountFor(sp.scientificName, 'site') },
-  { label:'Atlas Count (Buffer or IBRA sub)', color:'bamScreening', compute: sp => atlasCountFor(sp.scientificName, 'buffer') },
-  { label:'MNES (10km Buffer)', color:'bamScreening' },
-  { label:'BAM Predicted in IBRA subregion', color:'bamScreening' },
-  { label:'BAM Candidate', color:'bamScreening' },
-  { label:'BAM Candidate (Breeding)', color:'bamScreening' },
-  { label:'BAM Predicted', color:'bamScreening' },
-  { label:'BAM Predicted (Foraging)', color:'bamScreening' },
   { label:'Class of Credit', field:'classOfCredit' },
   { label:'Unit of Measure', field:'unitOfMeasure' },
   { label:'Offset Multiplier', field:'offsetMultiplier' },
@@ -3169,7 +3159,7 @@ function buildThreatenedSpeciesSheet(matches, title, result){
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: Abreviation, Class, Found during Survey, MNES and the BAM Candidate/Predicted columns are left blank — those need the department\'s full BAM assessment (MNES/survey data), not just PCT/IBRA screening. Atlas Count columns are populated only if "Fetch species sightings" was also run this session (blank otherwise) and count records by scientific name string match, not a guaranteed BioNet key join. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
+    ['Note: Abreviation and Class are left blank — this is a PCT/IBRA screening list, not a full BAM assessment. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that six-way test this data can evaluate.'],
     [],
     TS_SUMMARY_COLUMNS.map(c => c.label)
   ];
@@ -3760,15 +3750,6 @@ function renderSpeciesSightingsResult(result){
     if(e.target.checked) sightingsMapLayerGroup.addTo(map);
     else map.removeLayer(sightingsMapLayerGroup);
   });
-}
-
-// Atlas Count columns in the threatened species export (see TS_SUMMARY_COLUMNS
-// above) — blank until this fetch has run, since there's nothing to count yet.
-function atlasCountFor(scientificName, which){
-  if(!window.sightingsResult) return '';
-  const rec = window.sightingsResult.countByName.get(scientificName);
-  if(!rec) return 0;
-  return which === 'site' ? rec.site : rec.buffer;
 }
 
 // A handful of friendly columns up front (matched defensively — see
