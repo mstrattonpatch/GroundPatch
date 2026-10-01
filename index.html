@@ -887,6 +887,7 @@ function withProxy(url){
    summary — never a raw API key, never full layer geometry.
 ========================================================= */
 const CHAT_ENDPOINT = 'https://groundpatch-proxy.maxstratton12.workers.dev/chat';
+const SUMMARIZE_ENDPOINT = 'https://groundpatch-proxy.maxstratton12.workers.dev/summarize-habitat';
 
 /* =========================================================
    Default layer registry — real NSW ArcGIS services.
@@ -2869,11 +2870,11 @@ const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
 // looks frozen" looks like from the outside. Generous on purpose: some of
 // these queries (the full species reference table, with its several large
 // narrative text fields) can legitimately take a while per page.
-async function fetchWithTimeout(url, timeoutMs = 60000){
+async function fetchWithTimeout(url, options = {}, timeoutMs = 60000){
   const controller = new AbortController();
   const timer = setTimeout(()=> controller.abort(), timeoutMs);
   try{
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, { ...options, signal: controller.signal });
   }catch(e){
     if(e.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs/1000}s: ${url}`);
     throw e;
@@ -3543,18 +3544,49 @@ function cleanHabitatAndEcologyText(raw){
     .trim();
 }
 
+// Condenses each species' full BioNet habitat text down to a single
+// report-table-sized sentence via the Worker's own /summarize-habitat
+// endpoint (a plain batch summarisation call — separate from /chat, whose
+// system prompt is grounded to the site-Q&A persona, not this kind of
+// text-only task). One request covers every species at once. Merges the
+// result straight into the existing legal-status lookup Map, same pattern
+// as fetchHabitatAndEcologyFor.
+async function summarizeHabitatDescriptions(legalStatusLookup, scientificNames){
+  const entries = [...new Set(scientificNames)]
+    .map(name => ({ scientificName: name, text: cleanHabitatAndEcologyText(legalStatusLookup.get(name)?.habitatAndEcology) }))
+    .filter(e => e.text);
+  if(!entries.length) return;
+
+  const resp = await fetchWithTimeout(SUMMARIZE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ descriptions: entries }),
+  }, 60000);
+  const data = await resp.json();
+  if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+
+  Object.entries(data.summaries || {}).forEach(([name, summary])=>{
+    const existing = legalStatusLookup.get(name);
+    if(existing && summary) existing.habitatSummary = summary;
+  });
+}
+
 // Habitat description for the species summary report, sourced live from
 // BioNet's own ThreatenedBiodiversity_Species habitatAndEcology field —
 // no local/imported dataset, so a species that field doesn't cover is left
-// blank rather than guessed. When text is found, the species' own BioNet
-// profile page URL is appended as a trailing line, so the description is
-// traceable back to its source.
+// blank rather than guessed. Prefers the AI-condensed one-sentence summary
+// (see summarizeHabitatDescriptions) over the full raw text, falling back
+// to the full text only if summarisation wasn't run or failed — never both
+// shown, never silently empty just because the summary step had an issue.
+// When a description is found, the species' own BioNet profile page URL is
+// appended as a trailing line, so it's traceable back to its source.
 function habitatDescriptionFor(scientificName, legalStatusLookup){
   const live = legalStatusLookup && legalStatusLookup.get(scientificName);
-  const liveText = live && cleanHabitatAndEcologyText(live.habitatAndEcology);
-  if(!liveText) return '';
-  if(live.profileID == null) return liveText;
-  return `${liveText}\nhttps://threatenedspecies.bionet.nsw.gov.au/profile.aspx?id=${live.profileID}`;
+  if(!live) return '';
+  const text = live.habitatSummary || cleanHabitatAndEcologyText(live.habitatAndEcology);
+  if(!text) return '';
+  if(live.profileID == null) return text;
+  return `${text}\nhttps://threatenedspecies.bionet.nsw.gov.au/profile.aspx?id=${live.profileID}`;
 }
 
 async function fetchSpeciesSightingsForSite(){
@@ -3644,6 +3676,14 @@ async function fetchSpeciesSightingsForSite(){
       });
     }
     catch(habitatErr){ console.warn('Could not fetch habitat descriptions from BioNet — Habitat Description will be left blank.', habitatErr); }
+
+    // Also non-fatal — if the AI summary step fails, habitatDescriptionFor
+    // falls back to the full BioNet text rather than losing the field.
+    try{
+      statusEl.textContent = 'Summarising habitat descriptions with AI…';
+      await summarizeHabitatDescriptions(legalStatusLookup, [...countByName.keys()]);
+    }
+    catch(summaryErr){ console.warn('Could not summarise habitat descriptions with AI — showing the full BioNet text instead.', summaryErr); }
 
     window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, legalStatusLookup, truncated: !!gj.truncated };
     // Symbols assigned in descending order of frequency, so the most common
@@ -3839,8 +3879,8 @@ async function exportThreatenedSpeciesShapefile(result, btn){
 /* =========================================================
    Word (.docx) summary — one table per Kingdom/Class group, styled to
    match the department's existing house template (generate_word_report.js):
-   Montserrat 9pt, olive-green banner row per group, beige column-header
-   row, landscape A4. Built directly from the already-fetched, filtered,
+   Montserrat 8pt, olive-green banner row per group, beige column-header
+   row, landscape A3. Built directly from the already-fetched, filtered,
    distance-annotated sightings (window.sightingsResult) — no intermediate
    JSON/Python step needed, everything is already in memory.
 ========================================================= */
@@ -3849,11 +3889,12 @@ const DOCX_SIZE = 16; // half-points -> 8pt
 const DOCX_ROW_SPACING = { before: 120, after: 120 }; // twentieths of a point -> 6pt before/after
 const DOCX_GREEN = 'A3B38C'; // banner row fill
 const DOCX_BEIGE = 'F4F0EE'; // column header row fill
-const DOCX_HEADER_LABELS = ['Scientific Name', 'Common Name', 'Legal Status', 'Source', 'Number of records', 'Closest record and date', 'Most recent and proximity', 'Habitat Description', 'Rationale'];
-// DXA, sums to 15398 — the full usable width of a landscape A4 page with
-// 720 (0.5") margins each side (16838 - 720 - 720), so the table runs
-// edge to edge rather than leaving blank space down the right.
-const DOCX_COL_WIDTHS = [1400, 1400, 1000, 1000, 900, 1500, 1500, 4500, 2198];
+const DOCX_HEADER_LABELS = ['Scientific Name', 'Common Name', 'BC Act', 'EPBC Act', 'Source', 'Number of records', 'Closest record and date', 'Most recent and proximity', 'Habitat Description', 'Likelihood of Occurrence'];
+// DXA, sums to 22371 — the full usable width of a landscape A3 page with
+// 720 (0.5") margins each side (23811 - 720 - 720), so the table runs
+// edge to edge rather than leaving blank space down the right. Equal
+// width per column (remainder on the last one, to land exactly on 22371).
+const DOCX_COL_WIDTHS = [2237, 2237, 2237, 2237, 2237, 2237, 2237, 2237, 2237, 2238];
 const DOCX_TABLE_WIDTH = DOCX_COL_WIDTHS.reduce((a,b)=>a+b, 0);
 
 // GroundPatch logo, embedded inline (200x200 JPEG, ~2KB base64) so the
@@ -3888,7 +3929,8 @@ function aggregateSightingsBySpecies(records, legalStatusLookup){
         commonName: pickSightingField(props, 'commonName') || '',
         kingdom: kingdomBucket(pickSightingField(props, 'kingdom')),
         class: pickSightingField(props, 'class') || 'Unknown',
-        legalStatus: buildLegalStatusString(props, legalStatusLookup),
+        bcStatus: resolveConservationStatus(props, 'state', legalStatusLookup),
+        epbcStatus: resolveConservationStatus(props, 'country', legalStatusLookup),
         recs: []
       });
     }
@@ -3916,11 +3958,12 @@ function aggregateSightingsBySpecies(records, legalStatusLookup){
     }
     const sources = [...new Set(sp.recs.map(r=>r.source).filter(Boolean))];
     result.push({
-      ScientificName: sp.scientificName, CommonName: sp.commonName || '-', LegalStatus: sp.legalStatus || '-',
+      ScientificName: sp.scientificName, CommonName: sp.commonName || '-',
+      BCAct: sp.bcStatus || '-', EPBCAct: sp.epbcStatus || '-',
       Source: sources.join(', ') || '-',
       NumRecords: sp.recs.length, ClosestStr: closestStr, RecentStr: recentStr,
       HabitatDescription: habitatDescriptionFor(sp.scientificName, legalStatusLookup),
-      Rationale: '',
+      LikelihoodOfOccurrence: '',
       Kingdom: sp.kingdom, Class: sp.class
     });
   });
@@ -3952,7 +3995,7 @@ function docxHeaderRow(){
 }
 function docxDataRow(r){
   const { TableRow, TableCell, Paragraph, TextRun, WidthType } = docx;
-  const values = [r.ScientificName, r.CommonName, r.LegalStatus, r.Source, String(r.NumRecords), r.ClosestStr, r.RecentStr, r.HabitatDescription, r.Rationale];
+  const values = [r.ScientificName, r.CommonName, r.BCAct, r.EPBCAct, r.Source, String(r.NumRecords), r.ClosestStr, r.RecentStr, r.HabitatDescription, r.LikelihoodOfOccurrence];
   return new TableRow({
     children: values.map((v,i)=> new TableCell({
       width: { size: DOCX_COL_WIDTHS[i], type: WidthType.DXA },
@@ -4027,7 +4070,7 @@ async function exportSpeciesSightingsDocx(result){
     sections: [{
       properties: {
         page: {
-          size: { width: 16838, height: 11906 }, // A4
+          size: { width: 23811, height: 16838 }, // A3
           orientation: 'landscape',
           margin: { top:720, bottom:720, left:720, right:720 },
         },
