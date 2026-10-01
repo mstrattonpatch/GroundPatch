@@ -1986,14 +1986,22 @@ async function runAll(){
       const n = gj.features.length;
 
       if(n === 0){
-        lyr.on = false;
         lyr.lastGeoJSON = null;
         if(lyr.conditional){
+          // Conditional layers auto-manage their own on/off state every run
+          // (re-enabled below once features are found), so turning this off
+          // here is safe - it never needs to survive to the next query.
+          lyr.on = false;
           card.classList.add('empty');
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">not present</span></div>
                              <div class="rc-body">Does not intersect the ${ASSESSMENT_BUFFER_KM}km buffer — omitted as a conditional layer (map plate not required).</div>`;
           return `${lyr.name}: not present in buffer — omitted (conditional layer)`;
         } else {
+          // Deliberately NOT disabling lyr.on here (unlike conditional
+          // layers above) - whether this layer intersects now depends on
+          // the user-adjustable assessment buffer, so a 0-result run at one
+          // buffer size must not silently exclude it from the next query
+          // after the buffer is changed and "Fetch site data" is re-run.
           card.classList.add('empty');
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">no intersect</span></div>
                              <div class="rc-body">No features of this layer intersect the ${ASSESSMENT_BUFFER_KM}km buffer.</div>`;
