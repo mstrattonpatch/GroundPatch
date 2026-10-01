@@ -859,8 +859,13 @@ L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(m
 
 // Dedicated pane so the subject site outline always renders above queried
 // layer results, regardless of the order they're added to the map in.
+// pointerEvents:none is essential here — a canvas element intercepts clicks
+// across its whole rectangle (not just the pixels it actually draws), so
+// without this the boundary pane's canvas would sit on top of the entire
+// map and silently swallow every click/hover meant for the layers below it.
 map.createPane('boundaryPane');
 map.getPane('boundaryPane').style.zIndex = 650; // above the default overlay pane (400)
+map.getPane('boundaryPane').style.pointerEvents = 'none';
 
 let boundaryLayer = null;
 let boundaryGeom = null;   // GeoJSON geometry, Polygon or MultiPolygon, WGS84
@@ -1445,7 +1450,6 @@ function loadGeometry(geom, filename){
     pane:'boundaryPane',
     style:{ color:'#E81717', weight:2.5, fill:true, fillColor:'#E81717', fillOpacity:0.05 }
   }).addTo(map);
-  boundaryLayer.bindTooltip('Subject Site', { sticky:true });
 
   // Two rounded buffers: the user-adjustable assessment buffer for ecology
   // layers, and a fixed 500m buffer for context-only layers (cadastre).
