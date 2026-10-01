@@ -520,6 +520,17 @@
   #bioConstraintsCard .btn-row{ display:flex; gap:8px; flex:none; }
   #bioConstraintsCard .btn-row button{ flex:1; }
 
+  /* ---------- Fetch progress bar (BioNet queries can take a while to
+     page through) — total record count isn't known up front, so this is
+     an indeterminate sliding bar paired with a live page/record count,
+     rather than a false percentage. ---------- */
+  .fetch-progress-track{ height:4px; background:var(--line); border-radius:2px; overflow:hidden; margin-top:6px; }
+  .fetch-progress-fill{ height:100%; width:40%; background:var(--moss); border-radius:2px; animation:fetchProgressSlide 1.1s ease-in-out infinite; }
+  @keyframes fetchProgressSlide{
+    0%{ margin-left:-40%; }
+    100%{ margin-left:100%; }
+  }
+
   /* ---------- Biodiversity constraints result (sidebar) ---------- */
   .bc-tier-summary{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dotted #DAD5C6; font-size:12px; }
   .bc-tier-summary:last-of-type{ border-bottom:none; }
@@ -2852,11 +2863,13 @@ const TS_GEO_FIELDS = ['scientificName','IBRASubregion'];
 // what's asked for and returns either {d:{results,__next}} (verbose) or
 // {value, "@odata.nextLink"} depending on how it's configured — handle
 // both shapes and follow pagination until exhausted.
-// 20s cap per page — fetch() has no timeout of its own, so a stalled
+// 60s cap per page — fetch() has no timeout of its own, so a stalled
 // request to BioNet or the proxy would otherwise hang the whole await
 // forever with no error and no feedback, which is exactly what "the page
-// looks frozen" looks like from the outside.
-async function fetchWithTimeout(url, timeoutMs = 20000){
+// looks frozen" looks like from the outside. Generous on purpose: some of
+// these queries (the full species reference table, with its several large
+// narrative text fields) can legitimately take a while per page.
+async function fetchWithTimeout(url, timeoutMs = 60000){
   const controller = new AbortController();
   const timer = setTimeout(()=> controller.abort(), timeoutMs);
   try{
@@ -2869,7 +2882,11 @@ async function fetchWithTimeout(url, timeoutMs = 20000){
   }
 }
 
-async function fetchBioNetODataAll(entitySet, selectFields, filter){
+// onProgress(recordsSoFar, pageNumber), called after each page lands —
+// lets callers show live "page 4, 380 records so far" feedback instead of
+// a status message that doesn't change for however long a multi-page
+// fetch takes (see renderFetchProgress below).
+async function fetchBioNetODataAll(entitySet, selectFields, filter, onProgress){
   let url = `${BIONET_ODATA_BASE}/${entitySet}?$select=${selectFields.join(',')}&$format=json`
     + (filter ? `&$filter=${encodeURIComponent(filter)}` : '');
   const rows = [];
@@ -2881,9 +2898,18 @@ async function fetchBioNetODataAll(entitySet, selectFields, filter){
     const json = await resp.json();
     const batch = json.value || (json.d && json.d.results) || [];
     rows.push(...batch);
+    if(onProgress) onProgress(rows.length, guard);
     url = json['@odata.nextLink'] || json['odata.nextLink'] || (json.d && json.d.__next) || null;
   }
   return rows;
+}
+
+// A sliding (not percentage) progress bar, since the total record count
+// isn't known until the last page arrives — paired with the actual
+// page/record counts fetched so far, so a slow multi-page BioNet query
+// reads as "working" rather than "frozen".
+function renderFetchProgress(label, recordCount, page){
+  return `<div>${label} — page ${page}, ${recordCount} record(s) so far</div><div class="fetch-progress-track"><div class="fetch-progress-fill"></div></div>`;
 }
 
 function splitSemicolonList(str){
@@ -2934,8 +2960,14 @@ async function fetchThreatenedSpeciesForSite(){
   statusEl.textContent = 'Querying BioNet…';
 
   try{
+    // ThreatenedBiodiversity_Species carries several large narrative text
+    // fields across NSW's whole ~1300+ species table, so it's by far the
+    // slowest of these three — the only one worth showing page-by-page
+    // progress for.
     const [speciesRows, geoRows, nameRows] = await Promise.all([
-      fetchBioNetODataAll('ThreatenedBiodiversity_Species', TS_SPECIES_FIELDS),
+      fetchBioNetODataAll('ThreatenedBiodiversity_Species', TS_SPECIES_FIELDS, null, (count, page)=>{
+        statusEl.innerHTML = renderFetchProgress('Querying BioNet species reference data', count, page);
+      }),
       fetchBioNetODataAll('ThreatenedBiodiversity_TSGeographicData', TS_GEO_FIELDS),
       fetchBioNetODataAll('SpeciesNames', TS_SPECIESNAMES_FIELDS)
     ]);
@@ -3464,8 +3496,8 @@ const SIGHTINGS_QUALIFYING_WHERE = "(UPPER(stateConservation) LIKE '%ENDANGERED%
 // state-wide table on every click (instead of just the species a site
 // actually turned up) made this query dramatically heavier — enough to
 // look like the page had frozen. See fetchHabitatAndEcologyFor below.
-async function fetchSpeciesLegalStatusLookup(){
-  const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','stateConservation','countryConservation']);
+async function fetchSpeciesLegalStatusLookup(onProgress){
+  const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','stateConservation','countryConservation'], null, onProgress);
   const map = new Map();
   rows.forEach(r=>{ if(r.scientificName) map.set(r.scientificName, { stateConservation: r.stateConservation, countryConservation: r.countryConservation }); });
   return map;
@@ -3476,13 +3508,13 @@ async function fetchSpeciesLegalStatusLookup(){
 // $filter'd requests instead of paginating through ~1300+ full narrative
 // records every time. Merges straight into an existing legal-status lookup
 // Map so habitatDescriptionFor() doesn't need to know there were two fetches.
-async function fetchHabitatAndEcologyFor(scientificNames, legalStatusLookup){
+async function fetchHabitatAndEcologyFor(scientificNames, legalStatusLookup, onProgress){
   const names = [...new Set(scientificNames)].filter(Boolean);
   const BATCH_SIZE = 20; // keeps each $filter URL comfortably short
   for(let i = 0; i < names.length; i += BATCH_SIZE){
     const batch = names.slice(i, i + BATCH_SIZE);
     const filter = batch.map(n => `scientificName eq '${n.replace(/'/g, "''")}'`).join(' or ');
-    const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','habitatAndEcology','profileID'], filter);
+    const rows = await fetchBioNetODataAll('ThreatenedBiodiversity_Species', ['scientificName','habitatAndEcology','profileID'], filter, onProgress);
     rows.forEach(r=>{
       if(!r.scientificName) return;
       const existing = legalStatusLookup.get(r.scientificName) || {};
@@ -3595,14 +3627,22 @@ async function fetchSpeciesSightingsForSite(){
     // Non-fatal if this fails — exports fall back to the sightings layer's
     // own (less complete) status fields rather than losing the whole result.
     let legalStatusLookup = new Map();
-    try{ legalStatusLookup = await fetchSpeciesLegalStatusLookup(); }
+    try{
+      legalStatusLookup = await fetchSpeciesLegalStatusLookup((count, page)=>{
+        statusEl.innerHTML = renderFetchProgress('Fetching species conservation status from BioNet', count, page);
+      });
+    }
     catch(lookupErr){ console.warn('Could not fetch the authoritative BioNet species status table — Legal Status will fall back to the sightings layer\'s own simplified field.', lookupErr); }
 
     // Also non-fatal, and scoped to just the species this site actually
     // turned up (see fetchHabitatAndEcologyFor) rather than every listed
     // species statewide — Habitat Description just comes back blank for
     // these records if it fails.
-    try{ await fetchHabitatAndEcologyFor([...countByName.keys()], legalStatusLookup); }
+    try{
+      await fetchHabitatAndEcologyFor([...countByName.keys()], legalStatusLookup, (count, page)=>{
+        statusEl.innerHTML = renderFetchProgress('Fetching habitat descriptions from BioNet', count, page);
+      });
+    }
     catch(habitatErr){ console.warn('Could not fetch habitat descriptions from BioNet — Habitat Description will be left blank.', habitatErr); }
 
     window.sightingsResult = { records, withinSite, withinSiteSet, countByName, countByClass, excludedCount, legalStatusLookup, truncated: !!gj.truncated };
