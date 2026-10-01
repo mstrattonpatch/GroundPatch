@@ -2039,7 +2039,9 @@ async function runAll(){
             .filter(([k])=>!/^(shape|objectid)/i.test(k))
             .slice(0,8)
             .map(([k,v])=>`<div><b>${k}</b>: ${v}</div>`).join('');
-          l.bindPopup(`<div style="min-width:160px;"><div style="font-weight:600;margin-bottom:4px;">${lyr.name}</div>${rows}</div>`);
+          const html = `<div style="min-width:160px;"><div style="font-weight:600;margin-bottom:4px;">${lyr.name}</div>${rows}</div>`;
+          l.bindTooltip(html, { sticky:true });
+          l.bindPopup(html);
         }
       }).addTo(map);
       lyr.mapLayerGroup = glayer;
@@ -2104,7 +2106,9 @@ async function runAll(){
       const glayer = L.geoJSON(gj, {
         style:{ color: lyr.color, weight:1, fillColor: lyr.color, fillOpacity:0.35 },
         onEachFeature:(f, l)=>{
-          l.bindPopup(`<div style="min-width:140px;"><div style="font-weight:600;margin-bottom:4px;">${lyr.name}</div><div><b>Strahler order</b>: ${f.properties.STRM_ORDER}</div><div><b>Buffer width</b>: ${f.properties.buffer_m} m</div></div>`);
+          const html = `<div style="min-width:140px;"><div style="font-weight:600;margin-bottom:4px;">${lyr.name}</div><div><b>Strahler order</b>: ${f.properties.STRM_ORDER}</div><div><b>Buffer width</b>: ${f.properties.buffer_m} m</div></div>`;
+          l.bindTooltip(html, { sticky:true });
+          l.bindPopup(html);
         }
       }).addTo(map);
       lyr.mapLayerGroup = glayer;
@@ -2760,7 +2764,11 @@ function renderBioConstraintsResult(fc){
   if(bioConstraintsLayer){ map.removeLayer(bioConstraintsLayer); bioConstraintsLayer = null; }
   bioConstraintsLayer = L.geoJSON(fc, {
     style: f => ({ color:'#222', weight:1, fillColor: BIO_CONSTRAINT_COLORS[f.properties.tier] || '#888', fillOpacity:0.55 }),
-    onEachFeature:(f,l)=> l.bindPopup(`<div style="min-width:140px;"><b>${f.properties.tier} constraint</b><br>${f.properties.areaHectares} ha</div>`)
+    onEachFeature:(f,l)=> {
+      const html = `<div style="min-width:140px;"><b>${f.properties.tier} constraint</b><br>${f.properties.areaHectares} ha</div>`;
+      l.bindTooltip(html, { sticky:true });
+      l.bindPopup(html);
+    }
   }).addTo(map);
 
   const order = ['High','Medium','Low'];
@@ -3381,7 +3389,9 @@ function renderSightingsOnMap(records){
     const common = pickSightingField(props, 'commonName');
     const date = pickSightingField(props, 'recordDate');
     const distance = f._distanceM != null ? formatDistanceM(f._distanceM) + ' from subject site' : null;
-    marker.bindPopup(`<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Class</b>: ${className}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}${distance?`<div><b>Distance</b>: ${distance}</div>`:''}</div>`);
+    const html = `<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Class</b>: ${className}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}${distance?`<div><b>Distance</b>: ${distance}</div>`:''}</div>`;
+    marker.bindTooltip(html, { sticky:true });
+    marker.bindPopup(html);
     return marker;
   }).filter(Boolean);
   sightingsMapLayerGroup = L.layerGroup(markers).addTo(map);
