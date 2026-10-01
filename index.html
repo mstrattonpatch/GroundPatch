@@ -3559,24 +3559,54 @@ function cleanHabitatAndEcologyText(raw){
 // text-only task). One request covers every species at once. Merges the
 // result straight into the existing legal-status lookup Map, same pattern
 // as fetchHabitatAndEcologyFor.
-async function summarizeHabitatDescriptions(legalStatusLookup, scientificNames){
+// Haiku 4.5 caps output at 8192 tokens. Sending every found species in one
+// request used to blow that ceiling on sites with many (or long-winded)
+// species — Claude's JSON reply got cut off mid-response, failed to parse
+// on the Worker, and the whole batch fell back to full text, which is what
+// made the AI summary "not always" show up rather than just occasionally
+// losing one species. Chunking by a conservative combined-source-length
+// budget keeps every individual request's expected output well under that
+// cap, and isolating each chunk's try/catch means one bad chunk only
+// affects the species in it, not the whole fetch.
+const SUMMARIZE_MAX_BATCH_CHARS = 6000;
+const SUMMARIZE_MAX_BATCH_COUNT = 25;
+
+async function summarizeHabitatDescriptions(legalStatusLookup, scientificNames, onProgress){
   const entries = [...new Set(scientificNames)]
     .map(name => ({ scientificName: name, text: cleanHabitatAndEcologyText(legalStatusLookup.get(name)?.habitatAndEcology) }))
     .filter(e => e.text);
   if(!entries.length) return;
 
-  const resp = await fetchWithTimeout(SUMMARIZE_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ descriptions: entries }),
-  }, 60000);
-  const data = await resp.json();
-  if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+  const batches = [];
+  let current = [], currentChars = 0;
+  for(const e of entries){
+    if(current.length && (current.length >= SUMMARIZE_MAX_BATCH_COUNT || currentChars + e.text.length > SUMMARIZE_MAX_BATCH_CHARS)){
+      batches.push(current);
+      current = []; currentChars = 0;
+    }
+    current.push(e);
+    currentChars += e.text.length;
+  }
+  if(current.length) batches.push(current);
 
-  Object.entries(data.summaries || {}).forEach(([name, summary])=>{
-    const existing = legalStatusLookup.get(name);
-    if(existing && summary) existing.habitatSummary = summary;
-  });
+  for(let i = 0; i < batches.length; i++){
+    if(onProgress) onProgress(i + 1, batches.length);
+    try{
+      const resp = await fetchWithTimeout(SUMMARIZE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ descriptions: batches[i] }),
+      }, 60000);
+      const data = await resp.json();
+      if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+      Object.entries(data.summaries || {}).forEach(([name, summary])=>{
+        const existing = legalStatusLookup.get(name);
+        if(existing && summary) existing.habitatSummary = summary;
+      });
+    }catch(batchErr){
+      console.warn(`Could not summarise habitat descriptions for batch ${i + 1}/${batches.length} — those species will show the full BioNet text instead.`, batchErr);
+    }
+  }
 }
 
 // Habitat description for the species summary report, sourced live from
@@ -3694,7 +3724,7 @@ async function fetchSpeciesSightingsForSite(){
     // falls back to the full BioNet text rather than losing the field.
     try{
       progress.start(3);
-      await summarizeHabitatDescriptions(legalStatusLookup, [...countByName.keys()]);
+      await summarizeHabitatDescriptions(legalStatusLookup, [...countByName.keys()], (batch, total)=> progress.page(3, batch));
       progress.done(3);
     }
     catch(summaryErr){ console.warn('Could not summarise habitat descriptions with AI — showing the full BioNet text instead.', summaryErr); }
