@@ -3175,21 +3175,62 @@ function renderThreatenedSpeciesResult(result){
   document.getElementById('exportTsBySpecies').addEventListener('click', ()=> exportThreatenedSpeciesBySpecies(result));
 }
 
-// Matches the "Summary" sheet column layout (exact order and header text)
-// from the department's own Target List workbook, used by BOTH exports so
-// the header is identical either way. Columns left blank need data this
-// live PCT/IBRA query genuinely doesn't have access to: Abreviation, Class.
-// Everything else is either a direct BioNet field, a join against the
-// SpeciesNames table (Primary Growth Form Group), or computed from data
-// already fetched (Species Code from profileID, Consideration Required /
-// Reason for Consideration from SAII/SAII Breeding only — the other reasons
-// in the department's own hierarchy need survey/Atlas/MNES data this
-// doesn't have, so it's a partial, honest subset rather than a guess).
-// The nine BAM-screening columns (Found during Survey, both Atlas Count
-// columns, MNES, and the four BAM Predicted/Candidate columns) are
-// deliberately left out — they need the department's full BAM assessment,
-// not just PCT/IBRA screening.
-const TS_SUMMARY_COLUMNS = [
+// "By PCT" and "By Species" are two different reports with two different
+// column layouts - NOT the same columns re-sorted. "By PCT" matches the
+// "BAM Candidate and Predicted" sheet (TS_by_PCT_by_IBRAsub workbook); "By
+// Species" matches the "Summary" sheet (Target List workbook). Each has its
+// own column spec below, and buildThreatenedSpeciesRow/Sheet take the
+// relevant one as a parameter rather than assuming a single shared layout.
+
+// "By PCT": the four Predicted/Candidate columns replicate that sheet's own
+// formula exactly (confirmed against its live cell formulas): classOfCredit
+// is one of "Ecosystem", "Species" or "Species/Ecosystem" (a species can
+// carry both an ecosystem credit for general/foraging habitat and a species
+// credit specifically for breeding) — "EEC/Marine" rows match none of the
+// four and are left blank in all of them, same as the reference sheet.
+function classOfCreditColumn(sp, wanted){ return sp.classOfCredit === wanted ? sp.scientificName : ''; }
+const TS_PCT_COLUMNS = [
+  { label:'Scientific Name', field:'scientificName' },
+  { label:'Kingdom', field:'kingdom' },
+  { label:'Class of Credit', field:'classOfCredit' },
+  { label:'Predicted Species', compute: sp => classOfCreditColumn(sp, 'Ecosystem') },
+  { label:'Predicted Species (foraging)', compute: sp => classOfCreditColumn(sp, 'Species/Ecosystem') },
+  { label:'Candidate Species', compute: sp => classOfCreditColumn(sp, 'Species') },
+  { label:'Candidate Species (breeding)', compute: sp => classOfCreditColumn(sp, 'Species/Ecosystem') },
+  { label:'Patch Size', field:'patchSize' },
+  { label:'Native Vegetation Cover', field:'nativeVegetationCover' },
+  { label:'Habitat Constraints', field:'habitatConstraints', color:'habitatOrange' },
+  { label:'Habitat Constraints (Foraging)', field:'habitatConstraintsForaging', color:'habitatOrangeLight' },
+  { label:'Habitat Constraints (Breeding)', field:'habitatConstraintsBreeding', color:'habitatOrangeLight' },
+  { label:'Specific Survey Requirements', color:'surveyReqGreen' },
+  { label:'Months Of Survey', field:'monthsOfSurvey', color:'reasonGreen' },
+  ...CALENDAR_MONTHS.map(m => ({ label:m, color:'reasonGreen', month:m })),
+  { label:'Months Of Survey (Foraging)', field:'monthsOfSurveyForaging' },
+  { label:'Months Of Survey (Breeding)', field:'monthsOfSurveyBreeding' },
+  { label:'Occupy Paddock Trees', field:'occupyPaddockTrees', valueColored:true },
+  { label:'Unit of Measure', field:'unitOfMeasure' },
+  { label:'SAII', field:'SAII', color:'saiiGold' },
+  { label:'SAII Breeding', field:'SAIIBreeding' },
+  { label:'SAII Foraging', field:'SAIIForaging' },
+  { label:'Sensitivity To Loss', field:'sensitivityToLoss' },
+  { label:'Sensitivity To Potential Gain', field:'sensitivityToPotentialGain' },
+  { label:'General Notes', field:'generalNotes', color:'notesBlue' },
+];
+
+// "By Species": matches the "Summary" sheet column layout (exact order and
+// header text) from the department's own Target List workbook. Columns left
+// blank need data this live PCT/IBRA query genuinely doesn't have access
+// to: Abreviation, Class. Everything else is either a direct BioNet field,
+// a join against the SpeciesNames table (Primary Growth Form Group), or
+// computed from data already fetched (Species Code from profileID,
+// Consideration Required / Reason for Consideration from SAII/SAII
+// Breeding only — the other reasons in the department's own hierarchy need
+// survey/Atlas/MNES data this doesn't have, so it's a partial, honest
+// subset rather than a guess). The nine BAM-screening columns (Found
+// during Survey, both Atlas Count columns, MNES, and the four BAM
+// Predicted/Candidate columns) are deliberately left out — they need the
+// department's full BAM assessment, not just PCT/IBRA screening.
+const TS_SPECIES_COLUMNS = [
   { label:'Abreviation' },
   { label:'Kingdom', field:'kingdom' },
   { label:'Class' },
@@ -3260,10 +3301,10 @@ function monthCellValues(sp){
   return CALENDAR_MONTHS.map(m => set.has(m.toLowerCase()) ? 'Yes' : 'No');
 }
 
-function buildThreatenedSpeciesRow(sp){
+function buildThreatenedSpeciesRow(sp, columns){
   const months = monthCellValues(sp);
   let monthI = 0;
-  return TS_SUMMARY_COLUMNS.map(c=>{
+  return columns.map(c=>{
     if(c.month) return months[monthI++];
     if(c.compute) return c.compute(sp) || '';
     if(!c.field) return '';
@@ -3272,26 +3313,26 @@ function buildThreatenedSpeciesRow(sp){
   });
 }
 
-function buildThreatenedSpeciesSheet(matches, title, result){
+function buildThreatenedSpeciesSheet(matches, title, result, columns, note){
   const headerRowIdx = 6;
   const rows = [
     [title],
     ['Generated', new Date().toLocaleString()],
     ['Subject site PCTs', result.sitePcts.join(', ')],
     ['Site IBRA subregion(s)', result.siteIbra.join(', ') || 'n/a'],
-    ['Note: Abreviation, Class and the nine BAM-screening columns (Found during Survey, Atlas Count, MNES, BAM Predicted/Candidate) are left out — those need the department\'s full BAM assessment (MNES/survey data), not just PCT/IBRA screening. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that hierarchy this data can evaluate. Specific Survey Requirements is left blank — it needs a separate BAM-C reference table this tool doesn\'t have live access to.'],
+    [note],
     [],
-    TS_SUMMARY_COLUMNS.map(c => c.label)
+    columns.map(c => c.label)
   ];
-  matches.forEach(sp => rows.push(buildThreatenedSpeciesRow(sp)));
+  matches.forEach(sp => rows.push(buildThreatenedSpeciesRow(sp, columns)));
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = TS_SUMMARY_COLUMNS.map(c => ({ wch: c.month ? 5 : Math.min(34, Math.max(10, c.label.length + 2)) }));
-  styleHeaderRow(ws, headerRowIdx, TS_SUMMARY_COLUMNS.map(c => c.color ? TS_COLORS[c.color] : null));
+  ws['!cols'] = columns.map(c => ({ wch: c.month ? 5 : Math.min(34, Math.max(10, c.label.length + 2)) }));
+  styleHeaderRow(ws, headerRowIdx, columns.map(c => c.color ? TS_COLORS[c.color] : null));
 
   const monthColIdxs = [];
   let occupyColIdx = -1;
-  TS_SUMMARY_COLUMNS.forEach((c, i) => {
+  columns.forEach((c, i) => {
     if(c.month) monthColIdxs.push(i);
     if(c.valueColored) occupyColIdx = i;
   });
@@ -3304,18 +3345,21 @@ function buildThreatenedSpeciesSheet(matches, title, result){
   return ws;
 }
 
+const TS_PCT_NOTE = 'Note: this is a PCT/IBRA screening candidate list only — habitat constraints, native vegetation cover and patch size (BAM 2020 s.5.2.2) still need manual review. Specific Survey Requirements is left blank — it needs a separate BAM-C reference table this tool doesn\'t have live access to.';
+const TS_SPECIES_NOTE = 'Note: Abreviation, Class and the nine BAM-screening columns (Found during Survey, Atlas Count, MNES, BAM Predicted/Candidate) are left out — those need the department\'s full BAM assessment (MNES/survey data), not just PCT/IBRA screening. Consideration Required / Reason for Consideration only reflect SAII status, the one part of that hierarchy this data can evaluate. Specific Survey Requirements is left blank — it needs a separate BAM-C reference table this tool doesn\'t have live access to.';
+
 function exportThreatenedSpeciesByPct(result){
   if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
-  // "By PCT": same exact columns as "by species", one row per species (not
+  // Grouped by each species' first matched site PCT so species sharing a
+  // PCT sit together, rather than alphabetical (one row per species, not
   // exploded per matched PCT — the header has no PCT column of its own to
-  // distinguish duplicate rows), grouped by each species' first matched
-  // site PCT so species sharing a PCT sit together, rather than alphabetical.
+  // distinguish duplicate rows).
   const sorted = [...result.matches].sort((a,b)=>{
     const pa = [...a.matchedPcts].sort((x,y)=>x.localeCompare(y, undefined, {numeric:true}))[0];
     const pb = [...b.matchedPcts].sort((x,y)=>x.localeCompare(y, undefined, {numeric:true}))[0];
     return pa.localeCompare(pb, undefined, {numeric:true}) || a.scientificName.localeCompare(b.scientificName);
   });
-  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES BY PCT (BioNet — live query, grouped by matched PCT)', result);
+  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES BY PCT (BioNet — live query, grouped by matched PCT)', result, TS_PCT_COLUMNS, TS_PCT_NOTE);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By PCT');
   XLSX.writeFile(wb, 'threatened-species-by-pct-' + new Date().toISOString().slice(0,10) + '.xlsx');
@@ -3324,7 +3368,7 @@ function exportThreatenedSpeciesByPct(result){
 function exportThreatenedSpeciesBySpecies(result){
   if(typeof XLSX === 'undefined'){ alert('The Excel export library did not load — check network access to cdnjs.'); return; }
   const sorted = [...result.matches].sort((a,b)=> a.scientificName.localeCompare(b.scientificName));
-  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES LIST (BioNet — live query, sorted by species)', result);
+  const ws = buildThreatenedSpeciesSheet(sorted, 'THREATENED SPECIES LIST (BioNet — live query, sorted by species)', result, TS_SPECIES_COLUMNS, TS_SPECIES_NOTE);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'By Species');
   XLSX.writeFile(wb, 'threatened-species-list-' + new Date().toISOString().slice(0,10) + '.xlsx');
