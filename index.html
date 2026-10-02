@@ -1702,19 +1702,41 @@ async function postQuery(endpointUrl, params){
 async function queryLayerByIds(lyr){
   const esriGeom = toEsriRings(bufferGeomFor(lyr));
   const endpoint = `${lyr.url}/${lyr.id}/query`;
-  const idParams = new URLSearchParams({
-    f:'json',
-    where: lyr.where || '1=1',
-    geometry: JSON.stringify(esriGeom),
-    geometryType:'esriGeometryPolygon',
-    inSR:'4326',
-    spatialRel:'esriSpatialRelIntersects',
-    returnIdsOnly:'true'
-  });
-  const idResp = await postQuery(endpoint, idParams);
-  const idJson = await idResp.json();
-  if(idJson.error) throw new Error(idJson.error.message || 'service returned an error');
-  let ids = idJson.objectIds || [];
+
+  // The "fetch every matching OBJECTID first" approach only avoids
+  // maxRecordCount if returnIdsOnly itself isn't also capped by it - that
+  // turned out to be a bad assumption for at least one real NSW government
+  // service (SVTM), which silently truncated the ID list itself at its own
+  // default record limit (seen capping at exactly 500), with no error or
+  // flag to say so, regardless of what resultRecordCount asks for. So the
+  // stopping condition here can't compare against what WE asked for - it
+  // has to keep paging until a page comes back genuinely empty, however
+  // small the server's own real per-request cap turns out to be.
+  const ID_PAGE_SIZE = 2000;
+  const ID_PAGE_SAFETY_LIMIT = 50; // 50 pages is generous even at a server-side cap as low as a few hundred
+  let ids = [];
+  let offset = 0;
+  for(let page=0; page<ID_PAGE_SAFETY_LIMIT; page++){
+    const idParams = new URLSearchParams({
+      f:'json',
+      where: lyr.where || '1=1',
+      geometry: JSON.stringify(esriGeom),
+      geometryType:'esriGeometryPolygon',
+      inSR:'4326',
+      spatialRel:'esriSpatialRelIntersects',
+      returnIdsOnly:'true',
+      orderByFields:'OBJECTID',
+      resultOffset:String(offset),
+      resultRecordCount:String(ID_PAGE_SIZE)
+    });
+    const idResp = await postQuery(endpoint, idParams);
+    const idJson = await idResp.json();
+    if(idJson.error) throw new Error(idJson.error.message || 'service returned an error');
+    const pageIds = idJson.objectIds || [];
+    if(pageIds.length === 0) break; // genuinely nothing more, however small each page turned out to be
+    ids.push(...pageIds);
+    offset += pageIds.length;
+  }
   if(ids.length === 0) return { type:'FeatureCollection', features: [] };
 
   const TRUNCATE_AT = 20000; // hard safety cap
