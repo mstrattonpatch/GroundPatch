@@ -3735,6 +3735,57 @@ function cleanHabitatAndEcologyText(raw){
 const SUMMARIZE_MAX_BATCH_CHARS = 6000;
 const SUMMARIZE_MAX_BATCH_COUNT = 25;
 
+async function requestHabitatSummaries(batch){
+  const resp = await fetchWithTimeout(SUMMARIZE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ descriptions: batch }),
+  }, 60000);
+  const data = await resp.json();
+  if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data.summaries || {};
+}
+
+function applyHabitatSummaries(summaries, legalStatusLookup){
+  Object.entries(summaries).forEach(([name, summary])=>{
+    const existing = legalStatusLookup.get(name);
+    if(existing && summary) existing.habitatSummary = summary;
+  });
+}
+
+// On sites with many threatened species, a handful of batches out of many
+// would occasionally fail a one-off/transient error (a rate limit, a
+// network blip) with no retry at all, silently falling that whole batch
+// back to full BioNet text — this is what "works for most but not all"
+// looked like. One retry after a short pause covers the common transient
+// case. If it's still failing after that, it's more likely one specific
+// species' text is the actual problem (an unusual character breaking JSON
+// parsing, or a single entry pushing a borderline batch over the output
+// budget) than that the whole batch is bad — so instead of giving up on
+// every species in the batch, split it in half and retry each half on its
+// own, isolating the real problem down to as few species as possible
+// rather than losing the whole batch to one bad entry.
+async function summarizeBatchResilient(batch, legalStatusLookup, batchLabel){
+  try{
+    applyHabitatSummaries(await requestHabitatSummaries(batch), legalStatusLookup);
+    return;
+  }catch(err){
+    await new Promise(r=>setTimeout(r, 1500));
+    try{
+      applyHabitatSummaries(await requestHabitatSummaries(batch), legalStatusLookup);
+      return;
+    }catch(err2){
+      if(batch.length <= 1){
+        console.warn(`Could not summarise habitat description for "${batch[0]?.scientificName}" (${batchLabel}) — will show the full BioNet text instead.`, err2);
+        return;
+      }
+      const mid = Math.ceil(batch.length / 2);
+      await summarizeBatchResilient(batch.slice(0, mid), legalStatusLookup, batchLabel);
+      await summarizeBatchResilient(batch.slice(mid), legalStatusLookup, batchLabel);
+    }
+  }
+}
+
 async function summarizeHabitatDescriptions(legalStatusLookup, scientificNames, onProgress){
   const entries = [...new Set(scientificNames)]
     .map(name => ({ scientificName: name, text: cleanHabitatAndEcologyText(legalStatusLookup.get(name)?.habitatAndEcology) }))
@@ -3755,21 +3806,7 @@ async function summarizeHabitatDescriptions(legalStatusLookup, scientificNames, 
 
   for(let i = 0; i < batches.length; i++){
     if(onProgress) onProgress(i + 1, batches.length);
-    try{
-      const resp = await fetchWithTimeout(SUMMARIZE_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ descriptions: batches[i] }),
-      }, 60000);
-      const data = await resp.json();
-      if(!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
-      Object.entries(data.summaries || {}).forEach(([name, summary])=>{
-        const existing = legalStatusLookup.get(name);
-        if(existing && summary) existing.habitatSummary = summary;
-      });
-    }catch(batchErr){
-      console.warn(`Could not summarise habitat descriptions for batch ${i + 1}/${batches.length} — those species will show the full BioNet text instead.`, batchErr);
-    }
+    await summarizeBatchResilient(batches[i], legalStatusLookup, `batch ${i + 1}/${batches.length}`);
   }
 }
 
