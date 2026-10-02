@@ -1755,6 +1755,11 @@ async function queryLayerByIds(lyr){
   const result = { type:'FeatureCollection', features: allFeatures };
   if(truncated) result.truncated = true;
   if(partial) result.partial = true;
+  // Surfaced so a genuine "the server found nothing" (idsFound 0) can be
+  // told apart from "the server found matching IDs but every detail fetch
+  // for them failed" (idsFound > 0, allFeatures still empty) - the two look
+  // identical downstream (both end up as 0 features) unless this is kept.
+  result.idsFound = ids.length;
   return result;
 }
 
@@ -1991,6 +1996,7 @@ async function runAll(){
       gj.truncated = rawGj.truncated;
       gj.partial = rawGj.partial;
       gj.unpaginatedFallback = rawGj.unpaginatedFallback;
+      gj.idsFound = rawGj.idsFound;
       lyr.lastGeoJSON = gj;
       const n = gj.features.length;
 
@@ -2011,7 +2017,19 @@ async function runAll(){
           // the user-adjustable assessment buffer, so a 0-result run at one
           // buffer size must not silently exclude it from the next query
           // after the buffer is changed and "Fetch site data" is re-run.
+          // idsFound > 0 means the server itself matched features against
+          // the buffer, but every one of their detail fetches failed - a
+          // real fetch problem wearing the same "no intersect" badge as a
+          // genuine empty result, unless called out separately like this.
+          const fetchFailedDespiteMatch = gj.idsFound > 0;
           card.classList.add('empty');
+          if(fetchFailedDespiteMatch){
+            card.classList.remove('empty');
+            card.classList.add('error');
+            card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge err" style="margin-left:auto;">fetch failed</span></div>
+                               <div class="rc-body">The server matched ${gj.idsFound} feature${gj.idsFound>1?'s':''} against the ${ASSESSMENT_BUFFER_KM}km buffer, but fetching ${gj.idsFound>1?'their details':'its details'} failed. This isn't "no intersect" — retry, or check the connection to the proxy.</div>`;
+            return `${lyr.name}: ${gj.idsFound} feature(s) matched but detail fetch failed`;
+          }
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">no intersect</span></div>
                              <div class="rc-body">No features of this layer intersect the ${ASSESSMENT_BUFFER_KM}km buffer.</div>`;
           return `${lyr.name}: no intersecting features`;
