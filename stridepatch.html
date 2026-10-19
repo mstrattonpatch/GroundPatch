@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>StridePatch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:ital,wght@1,600;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
+<style>
+  :root{
+    --ink:#1E2A24;
+    --ink-soft:#4B564E;
+    --paper:#EDEAE0;
+    --panel:#F6F4EC;
+    --line:#C9C4B4;
+    --moss:#52684A;
+    --moss-soft:#DDE4D6;
+    --slate:#3B5567;
+    --slate-soft:#DCE4E8;
+    --amber:#B9852E;
+    --amber-soft:#F0E1C4;
+    --red:#9C3B3B;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:'Public Sans', system-ui, sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    display:flex;
+    height:100vh;
+    overflow:hidden;
+  }
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  #sidebar{
+    width:380px;
+    min-width:380px;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  #sidebar-scroll{
+    overflow-y:auto;
+    flex:1;
+    padding:20px 20px 40px;
+  }
+  header.brand{
+    padding:18px 20px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  header.brand .brand-row{
+    display:flex; align-items:center; gap:10px; margin-bottom:2px;
+  }
+  header.brand h1{
+    margin:0;
+    font-size:16px;
+    font-weight:700;
+    letter-spacing:0.01em;
+  }
+  header.brand h1 .wordmark-patch{
+    font-family:'Fraunces', serif;
+    font-style:italic;
+    font-weight:700;
+    font-size:1.2em;
+    letter-spacing:-0.01em;
+    background:linear-gradient(100deg, #52684A 0%, #3B5567 100%);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+  header.brand .tagline{
+    font-size:11px;
+    color:var(--ink-soft);
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    margin:2px 0 0;
+  }
+  header.brand p{
+    margin:4px 0 0;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    line-height:1.4;
+  }
+
+  section{ margin-bottom:22px; }
+  section h2{
+    font-size:11.5px;
+    font-weight:600;
+    color:var(--ink-soft);
+    margin:0 0 8px;
+    padding-bottom:6px;
+    border-bottom:1px solid var(--line);
+  }
+
+  .mode-tabs{ display:flex; gap:2px; margin-bottom:18px; border:1px solid var(--line); border-radius:2px; overflow:hidden; }
+  .mode-tab{
+    flex:1; border:none; border-radius:0; background:#fff; color:var(--ink-soft);
+    font-size:11.5px; font-weight:600; padding:8px 6px;
+  }
+  .mode-tab.active{ background:var(--moss); color:#fff; }
+  .mode-tab:hover:not(.active){ background:var(--moss-soft); border-color:var(--line); }
+
+  #dropzone{
+    border:1.5px dashed var(--line);
+    background:#fff;
+    border-radius:2px;
+    padding:16px;
+    text-align:center;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    transition:border-color .15s;
+  }
+  #dropzone:hover, #dropzone.drag{
+    border-color:var(--moss);
+    color:var(--ink);
+  }
+  #dropzone strong{ color:var(--ink); font-weight:600; }
+  #fileStatus{
+    margin-top:8px;
+    font-size:12px;
+    line-height:1.5;
+  }
+  #fileStatus .ok{ color:var(--moss); }
+  #fileStatus .err{ color:var(--red); }
+
+  .site-row{
+    display:flex;
+    align-items:center;
+    gap:9px;
+    padding:7px 0;
+    border-bottom:1px solid #E4E0D2;
+    font-size:12.5px;
+  }
+  .site-row:last-child{ border-bottom:none; }
+  .site-row .swatch{ width:10px; height:10px; flex:none; border:1px solid rgba(0,0,0,.25); border-radius:50%; }
+  .site-row .name{ flex:1; }
+  .site-row button.del{
+    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:15px; line-height:1; padding:2px 4px;
+  }
+  .site-row button.del:hover{ color:var(--red); }
+
+  label.field{ display:block; font-size:11.5px; color:var(--ink-soft); margin:0 0 4px; }
+  .field-row{ display:flex; gap:10px; margin-bottom:10px; }
+  .field-row > div{ flex:1; }
+  input[type=number], input[type=text]{
+    width:100%; font-family:inherit; font-size:12.5px; padding:7px 9px;
+    border:1px solid var(--line); border-radius:2px; background:#fff; color:var(--ink);
+  }
+  input[type=number]:focus, input[type=text]:focus{ outline:none; border-color:var(--moss); }
+
+  button{
+    font-family:inherit; font-size:12.5px; cursor:pointer;
+    border-radius:2px; border:1px solid var(--line); background:#fff; color:var(--ink);
+    padding:8px 12px; transition:background .12s, border-color .12s;
+  }
+  button:hover{ border-color:var(--moss); }
+  button:disabled{ opacity:.5; cursor:default; }
+  button.primary{
+    width:100%; background:var(--moss); color:#fff; border-color:var(--moss); font-weight:600; padding:10px 12px;
+  }
+  button.primary:hover{ background:#455C3E; }
+  button.secondary{ width:100%; }
+
+  .result-card{
+    background:#fff; border:1px solid var(--line); border-radius:2px; padding:10px 12px; margin-bottom:8px; font-size:12.5px;
+  }
+  .result-card .rc-head{ display:flex; align-items:center; gap:8px; font-weight:600; }
+  .result-card .rc-body{ margin-top:4px; color:var(--ink-soft); line-height:1.5; }
+  .result-card.error{ border-color:var(--red); }
+
+  .export-row{
+    display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #E4E0D2; font-size:12.5px;
+  }
+  .export-row:last-child{ border-bottom:none; }
+  .export-row .name{ flex:1; }
+  .export-row button{ padding:5px 8px; font-size:11.5px; }
+
+  #mapwrap{ flex:1; position:relative; }
+  #map{ height:100%; }
+  #loadingOverlay{
+    display:none; position:absolute; inset:0; background:rgba(237,234,224,.85); z-index:1000;
+    align-items:center; justify-content:center; font-size:13px; color:var(--ink-soft);
+  }
+  #loadingOverlay.show{ display:flex; }
+
+  .legend-box{
+    position:absolute; left:12px; bottom:12px; z-index:900;
+    background:#fff; border:1px solid var(--line); border-radius:2px; padding:10px 12px; font-size:11.5px;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+  }
+  .legend-box .lg-row{ display:flex; align-items:center; gap:6px; margin-top:4px; }
+  .legend-box .lg-row:first-child{ margin-top:0; }
+  .legend-box .lg-swatch{ width:14px; height:10px; flex:none; border:1px solid rgba(0,0,0,.25); }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <header class="brand">
+    <div class="brand-row">
+      <h1>Stride<span class="wordmark-patch">Patch</span></h1>
+    </div>
+    <p class="tagline">Walkability Catchments</p>
+    <p>Upload one or more site polygons, set a walking distance and interval, and generate street-network walking catchments (not straight-line buffers) for each site.</p>
+  </header>
+
+  <div id="sidebar-scroll">
+
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="tabCatchments">Walkability Catchments</button>
+      <button class="mode-tab" id="tabLmr">LMR Compliance Check</button>
+    </div>
+
+    <section>
+      <h2>Sites</h2>
+      <div id="dropzone">
+        <div><strong>Click to upload</strong> or drag a file here</div>
+        <div style="margin-top:4px;">.geojson · .json · .kml · .zip (shapefile) — every polygon in the file becomes a site</div>
+      </div>
+      <input type="file" id="fileInput" accept=".geojson,.json,.kml,.zip" style="display:none">
+      <div id="fileStatus"></div>
+      <div id="siteList" style="margin-top:8px;"></div>
+    </section>
+
+    <div id="catchmentModePanel">
+      <section>
+        <h2>Catchment settings</h2>
+        <div class="field-row">
+          <div>
+            <label class="field">Max distance (m)</label>
+            <input type="number" id="maxDistance" value="1200" min="100" step="100">
+          </div>
+          <div>
+            <label class="field">Interval (m)</label>
+            <input type="number" id="interval" value="400" min="50" step="50">
+          </div>
+        </div>
+        <label class="field">Walking corridor width (m) — how wide each street is drawn</label>
+        <input type="number" id="corridorWidth" value="20" min="5" step="5" style="margin-bottom:10px;">
+        <button class="primary" id="runCatchments">Generate catchments</button>
+        <div id="runStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section id="resultsSection" style="display:none;">
+        <h2>Results</h2>
+        <div id="resultsList"></div>
+      </section>
+
+      <section id="exportSection" style="display:none;">
+        <h2>Export</h2>
+        <div id="exportList"></div>
+        <button class="secondary" id="downloadAllZip" style="margin-top:8px;">Download everything (.zip)</button>
+      </section>
+    </div>
+
+    <div id="lmrModePanel" style="display:none;">
+      <section>
+        <h2>Official NSW LMR layers</h2>
+        <p style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">Loads the real Town Centre boundaries and Low/Mid Rise Housing Exclusion areas published by the NSW Planning Portal (Housing SEPP), for whatever's in view on the map right now. Pan/zoom to your site first, then load — click a boundary afterwards to set the reference point to its nearest edge to your site(s).</p>
+        <button class="secondary" id="loadLmrOfficialLayers">Load layers for current map view</button>
+        <div id="lmrOfficialStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section>
+        <h2>Reference point</h2>
+        <p style="font-size:12px;color:var(--ink-soft);margin:0 0 8px;">The Town Centre point or station entrance sites are measured against — per Housing SEPP Sch 10, click the specific point on the map (e.g. the mapped Town Centre boundary edge, or the station entrance).</p>
+        <button class="secondary" id="setRefPoint">Click map to set point</button>
+        <div id="refPointStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section>
+        <h2>LMR settings</h2>
+        <label class="field">Average dwelling size (m² GFA) — for indicative yield only</label>
+        <input type="number" id="avgDwellingSize" value="85" min="10" step="5" style="margin-bottom:10px;">
+        <p style="font-size:11px;color:var(--ink-soft);margin:0 0 10px;line-height:1.5;">Inner area (≤400m) = 2.2:1 FSR, Outer area (400–800m) = 1.5:1 FSR, per Housing SEPP s180. Arterial roads = OSM primary/secondary/trunk ways (a proxy — supply a TfNSW classified-roads service URL if you need the authoritative dataset). Restricted scenario only allows crossing an arterial at a tagged pedestrian crossing or traffic signal.</p>
+        <button class="primary" id="runLmrCheck">Run compliance check</button>
+        <div id="lmrRunStatus" style="margin-top:6px;font-size:12px;"></div>
+      </section>
+
+      <section id="lmrResultsSection" style="display:none;">
+        <h2>Results</h2>
+        <div id="lmrResultsList"></div>
+      </section>
+
+      <section id="lmrExportSection" style="display:none;">
+        <h2>Export</h2>
+        <button class="secondary" id="downloadLmrCsv">Download comparison table (.csv)</button>
+        <div id="lmrExportList" style="margin-top:8px;"></div>
+      </section>
+    </div>
+
+    <section>
+      <h2>Debug log</h2>
+      <p style="font-size:11px;color:var(--ink-soft);margin:0 0 8px;">Every Overpass query and its exact response/error — copy this and paste it back rather than transcribing an error card by hand.</p>
+      <button class="secondary" id="copyDebugLog" style="margin-bottom:8px;">Copy log</button>
+      <button class="secondary" id="clearDebugLog" style="margin-bottom:8px;">Clear</button>
+      <pre id="debugLog" class="mono" style="background:#fff;border:1px solid var(--line);border-radius:2px;padding:8px;font-size:10.5px;line-height:1.5;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+    </section>
+
+  </div>
+</div>
+
+<div id="mapwrap">
+  <div id="map"></div>
+  <div id="loadingOverlay"><div>Fetching street network and computing catchments… (public Overpass mirrors can take up to a minute or two under load, per site — check the Debug log for live progress)</div></div>
+  <div class="legend-box" id="legendBox" style="display:none;"></div>
+</div>
+
+<script>
+/* =========================================================
+   Map setup — Esri's World_Street_Map service: the same z/y/x tile
+   pattern GroundPatch already relies on for World_Imagery, proven to
+   work without an API key in this environment. Tried CARTO Positron
+   (now requires a key) and raw OpenStreetMap tiles (actively blocks
+   third-party apps that don't register per their usage policy) first —
+   both dead ends, so sticking with the already-proven Esri service
+   rather than gambling on a third free provider.
+========================================================= */
+const map = L.map('map', { zoomControl:true }).setView([-33.87, 151.21], 14);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19,
+  attribution: 'Esri, HERE, Garmin, OpenStreetMap contributors'
+}).addTo(map);
+L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
+
+map.createPane('sitePane');
+map.getPane('sitePane').style.zIndex = 650; // sites always render above their own catchments
+map.createPane('refPane');
+map.getPane('refPane').style.zIndex = 660; // reference point marker always on top of everything
+
+/* =========================================================
+   Mode switching — Sites are shared between both modes; each
+   mode has its own settings/results/export panel.
+========================================================= */
+const tabCatchments = document.getElementById('tabCatchments');
+const tabLmr = document.getElementById('tabLmr');
+tabCatchments.addEventListener('click', ()=> setMode('catchments'));
+tabLmr.addEventListener('click', ()=> setMode('lmr'));
+function setMode(mode){
+  const isLmr = mode === 'lmr';
+  tabCatchments.classList.toggle('active', !isLmr);
+  tabLmr.classList.toggle('active', isLmr);
+  document.getElementById('catchmentModePanel').style.display = isLmr ? 'none' : 'block';
+  document.getElementById('lmrModePanel').style.display = isLmr ? 'block' : 'none';
+}
+
+/* =========================================================
+   Reference point (Town Centre / station entrance) — for the
+   LMR mode, click-to-place on the map.
+========================================================= */
+let refPoint = null; // [lon, lat]
+let refPointMarker = null;
+let settingRefPoint = false;
+
+document.getElementById('setRefPoint').addEventListener('click', ()=>{
+  settingRefPoint = true;
+  document.getElementById('refPointStatus').innerHTML = '<span class="ok">Click anywhere on the map…</span>';
+});
+
+map.on('click', (e)=>{
+  if(!settingRefPoint) return;
+  settingRefPoint = false;
+  refPoint = [e.latlng.lng, e.latlng.lat];
+  if(refPointMarker) map.removeLayer(refPointMarker);
+  refPointMarker = L.circleMarker(e.latlng, { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+  refPointMarker.bindTooltip('Reference point (Town Centre / Station)', { permanent:false });
+  document.getElementById('refPointStatus').innerHTML = `<span class="ok">Set at ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}</span>`;
+});
+
+/* =========================================================
+   CORS proxy — same Cloudflare Worker GroundPatch uses. Direct fetch
+   to Overpass sometimes fails from a deployed static site ("Failed to
+   fetch") even though Overpass is generally CORS-open, so route
+   through the proxy rather than depend on that.
+========================================================= */
+const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
+const PROXY_HOSTS = ['overpass-api.de', 'overpass.kumi.systems', 'overpass.private.coffee', 'mapprod3.environment.nsw.gov.au'];
+function needsProxy(url){
+  try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
+  catch(e){ return false; }
+}
+function withProxy(url){
+  return needsProxy(url) ? LOCAL_PROXY + encodeURIComponent(url) : url;
+}
+
+/* =========================================================
+   Official NSW LMR layers — Town Centres Map + Low and Mid Rise
+   Housing Exclusion Map, published by the NSW Planning Portal under
+   the Housing SEPP. Confirmed queryable (capabilities: Map,Query,Data)
+   at ePlanning/Planning_Portal_SEPP/MapServer — unlike the DPIE draft
+   service at spatialportalarcgis.dpie.nsw.gov.au/LMR/LMR, which has
+   Query explicitly disabled at both service and layer level.
+   MapServer/12 ("State Environmental Planning Policy (Housing) 2021")
+   lists sublayer 766 = Town Centres Map, 776 = Exclusion Map.
+========================================================= */
+const NSW_SEPP_HOUSING_SERVICE = 'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/ePlanning/Planning_Portal_SEPP/MapServer';
+const LMR_OFFICIAL_LAYERS = [
+  { id: 766, name: 'Town Centres Map', color: '#1a73e8' },
+  { id: 776, name: 'Low and Mid Rise Housing Exclusion Map', color: '#d93025' },
+];
+let lmrOfficialLayerGroup = null;
+let lmrOfficialFeatureCount = 0;
+
+async function fetchArcgisLayerForBounds(layerId, bounds){
+  const envelope = {
+    xmin: bounds.getWest(), ymin: bounds.getSouth(),
+    xmax: bounds.getEast(), ymax: bounds.getNorth(),
+    spatialReference: { wkid: 4326 }
+  };
+  const url = `${NSW_SEPP_HOUSING_SERVICE}/${layerId}/query?` + new URLSearchParams({
+    f: 'geojson',
+    where: '1=1',
+    outFields: '*',
+    geometry: JSON.stringify(envelope),
+    geometryType: 'esriGeometryEnvelope',
+    inSR: '4326',
+    outSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects',
+    resultRecordCount: '500'
+  });
+  const proxiedUrl = withProxy(url);
+  debugLog(`REQUEST → ${proxiedUrl}`);
+  const resp = await fetch(proxiedUrl);
+  const bodyText = await resp.text();
+  if(!resp.ok){
+    throw new Error(`HTTP ${resp.status}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,200) : ''}`);
+  }
+  const gj = JSON.parse(bodyText);
+  if(gj.error){
+    let msg = gj.error.message || 'service returned an error';
+    if(gj.error.details && gj.error.details.length) msg += ' — ' + gj.error.details.join('; ');
+    throw new Error(msg);
+  }
+  debugLog(`RESPONSE ← ${url}\nHTTP ${resp.status} OK — ${(gj.features||[]).length} feature(s)`);
+  return gj.features || [];
+}
+
+document.getElementById('loadLmrOfficialLayers').addEventListener('click', async ()=>{
+  const statusEl = document.getElementById('lmrOfficialStatus');
+  statusEl.innerHTML = '<span>Loading…</span>';
+  if(lmrOfficialLayerGroup) map.removeLayer(lmrOfficialLayerGroup);
+  lmrOfficialLayerGroup = L.layerGroup().addTo(map);
+  lmrOfficialFeatureCount = 0;
+  const bounds = map.getBounds();
+  const errors = [];
+  for(const layerDef of LMR_OFFICIAL_LAYERS){
+    try{
+      const features = await fetchArcgisLayerForBounds(layerDef.id, bounds);
+      features.forEach(f=>{
+        lmrOfficialFeatureCount++;
+        L.geoJSON(f, {
+          style: { color: layerDef.color, weight: 2, fillOpacity: 0.12 },
+          onEachFeature: (feat, lyr)=>{
+            const props = feat.properties || {};
+            const label = props.PRECINCT || props.LABEL || props.MAP_NAME || layerDef.name;
+            lyr.bindTooltip(`${layerDef.name}: ${label} (click to use as reference)`, { sticky:true });
+            lyr.on('click', (ev)=>{
+              L.DomEvent.stopPropagation(ev);
+              useOfficialLayerAsReference(feat, layerDef.name);
+            });
+          }
+        }).addTo(lmrOfficialLayerGroup);
+      });
+    }catch(err){
+      errors.push(`${layerDef.name}: ${err.message}`);
+    }
+  }
+  if(errors.length && lmrOfficialFeatureCount === 0){
+    statusEl.innerHTML = `<span class="err">Failed to load: ${errors.join(' | ')}</span>`;
+  } else if(errors.length){
+    statusEl.innerHTML = `<span class="ok">${lmrOfficialFeatureCount} feature(s) loaded</span> — <span class="err">${errors.join(' | ')}</span>`;
+  } else if(lmrOfficialFeatureCount === 0){
+    statusEl.innerHTML = '<span>No Town Centre or Exclusion Map features in the current map view — pan/zoom to the area first.</span>';
+  } else {
+    statusEl.innerHTML = `<span class="ok">${lmrOfficialFeatureCount} feature(s) loaded — click a boundary on the map to use it as the reference point</span>`;
+  }
+});
+
+// Approximates the nearest point on an official boundary's outline to a
+// site polygon: turf has no line-to-polygon nearest-point function, so
+// every site vertex is tested against the boundary line (turf.nearestPointOnLine
+// is point-to-line) and the closest pair wins. Real NSW EPI polygons have
+// dense rings, so this is accurate in practice despite being an approximation.
+function nearestPointOnBoundaryToSite(boundaryLine, siteGeom){
+  const coords = siteGeom.type === 'MultiPolygon' ? siteGeom.coordinates.flat(2) : siteGeom.coordinates.flat();
+  let best = null, bestDistKm = Infinity;
+  coords.forEach(coord=>{
+    const nearest = turf.nearestPointOnLine(boundaryLine, turf.point(coord));
+    if(nearest.properties.dist < bestDistKm){
+      bestDistKm = nearest.properties.dist;
+      best = nearest.geometry.coordinates;
+    }
+  });
+  return { point: best, distKm: bestDistKm };
+}
+
+function useOfficialLayerAsReference(feature, layerName){
+  if(!sites.length){
+    alert('Add at least one site first — the reference point is set to the point on this boundary nearest your site(s).');
+    return;
+  }
+  const boundaryLine = turf.polygonToLine(feature);
+  let best = null, bestDistKm = Infinity;
+  sites.forEach(site=>{
+    const r = nearestPointOnBoundaryToSite(boundaryLine, site.geom);
+    if(r.point && r.distKm < bestDistKm){ bestDistKm = r.distKm; best = r.point; }
+  });
+  if(!best) return;
+  refPoint = best;
+  if(refPointMarker) map.removeLayer(refPointMarker);
+  refPointMarker = L.circleMarker([refPoint[1], refPoint[0]], { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+  refPointMarker.bindTooltip(`Reference point — nearest edge of ${layerName}`, { permanent:false });
+  document.getElementById('refPointStatus').innerHTML = `<span class="ok">Set from ${layerName} — nearest edge to your site(s), ${(bestDistKm*1000).toFixed(0)}m away, at ${refPoint[1].toFixed(6)}, ${refPoint[0].toFixed(6)}</span>`;
+}
+
+/* =========================================================
+   File upload — every Polygon/MultiPolygon feature in the file
+   becomes a separate site (unlike GroundPatch, which only takes
+   the first one — this tool is built around handling several).
+========================================================= */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileStatus = document.getElementById('fileStatus');
+
+dropzone.addEventListener('click', ()=> fileInput.click());
+['dragover','dragleave','drop'].forEach(evt=>{
+  dropzone.addEventListener(evt, e=>{
+    e.preventDefault();
+    dropzone.classList.toggle('drag', evt==='dragover');
+  });
+});
+dropzone.addEventListener('drop', e=>{
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function handleFile(file){
+  const ext = file.name.split('.').pop().toLowerCase();
+  fileStatus.innerHTML = `Reading <strong>${file.name}</strong>…`;
+
+  if(ext==='geojson' || ext==='json'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{
+        const gj = JSON.parse(e.target.result);
+        addSitesFromGeometries(extractAllGeometries(gj), file.name);
+      }catch(err){ fail('Could not parse GeoJSON: ' + err.message); }
+    };
+    reader.readAsText(file);
+
+  }else if(ext==='kml'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try{
+        const geoms = parseKMLAll(e.target.result);
+        addSitesFromGeometries(geoms, file.name);
+      }catch(err){ fail('Could not parse KML: ' + err.message); }
+    };
+    reader.readAsText(file);
+
+  }else if(ext==='zip'){
+    if(typeof shp === 'undefined'){
+      fail('Shapefile support (shp.js) did not load — check network access to cdnjs, or export as GeoJSON/KML instead.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      shp(e.target.result).then(gj=>{
+        addSitesFromGeometries(extractAllGeometries(gj), file.name);
+      }).catch(err=> fail('Could not parse shapefile: ' + err.message));
+    };
+    reader.readAsArrayBuffer(file);
+
+  }else{
+    fail('Unsupported file type: .' + ext);
+  }
+}
+
+function fail(msg){
+  fileStatus.innerHTML = `<span class="err">${msg}</span>`;
+}
+
+// Pull every Polygon/MultiPolygon geometry out of a Feature, FeatureCollection, or bare geometry
+function extractAllGeometries(gj){
+  if(!gj) throw new Error('empty file');
+  if(gj.type === 'FeatureCollection'){
+    const geoms = gj.features.filter(f => f.geometry && (f.geometry.type==='Polygon' || f.geometry.type==='MultiPolygon')).map(f=>f.geometry);
+    if(!geoms.length) throw new Error('no polygon features found');
+    return geoms;
+  }
+  if(gj.type === 'Feature') return [gj.geometry];
+  if(gj.type === 'Polygon' || gj.type === 'MultiPolygon') return [gj];
+  throw new Error('no polygon geometry found');
+}
+
+// Minimal KML polygon parser — reads every <Polygon><outerBoundaryIs><LinearRing><coordinates>
+function parseKMLAll(text){
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  const polys = doc.getElementsByTagName('Polygon');
+  if(!polys.length) throw new Error('no <Polygon> elements found in KML');
+  const geoms = [];
+  for(const poly of polys){
+    const coordEls = poly.getElementsByTagName('coordinates');
+    if(!coordEls.length) continue;
+    const raw = coordEls[0].textContent.trim();
+    const ring = raw.split(/\s+/).map(pair=>{
+      const [lon, lat] = pair.split(',').map(Number);
+      return [lon, lat];
+    });
+    geoms.push({ type:'Polygon', coordinates:[ring] });
+  }
+  if(!geoms.length) throw new Error('no coordinates found in KML polygons');
+  return geoms;
+}
+
+/* =========================================================
+   Sites registry — each site is one polygon with its own
+   generated catchments, all independent of each other.
+========================================================= */
+let sites = [];
+let siteIdCounter = 0;
+const SITE_COLOR_PALETTE = ['#3B5567','#B9852E','#7A5C8E','#52684A','#9C3B3B','#3B7C97'];
+
+// Drawn immediately on upload (not just after a successful catchment run) —
+// no reason a later network failure should hide where the sites even are.
+function drawSiteBoundary(site){
+  if(site.siteLayer) map.removeLayer(site.siteLayer);
+  site.siteLayer = L.geoJSON(site.geom, {
+    pane:'sitePane',
+    style:{ color:'#E81717', weight:2, fill:true, fillColor:'#E81717', fillOpacity:0.15 }
+  }).addTo(map);
+  site.siteLayer.bindTooltip(site.name, { sticky:true });
+}
+
+function addSitesFromGeometries(geoms, filename){
+  geoms.forEach((geom, i)=>{
+    const id = siteIdCounter++;
+    const name = geoms.length > 1 ? `${filename.replace(/\.[^.]+$/,'')} — site ${i+1}` : filename.replace(/\.[^.]+$/,'');
+    const site = { id, name, geom, color: SITE_COLOR_PALETTE[id % SITE_COLOR_PALETTE.length], catchments:null, siteLayer:null, catchmentLayers:[] };
+    sites.push(site);
+    drawSiteBoundary(site);
+  });
+  renderSiteList();
+  fitMapToSites();
+  fileStatus.innerHTML = `<span class="ok">Loaded ${geoms.length} site${geoms.length>1?'s':''} from ${filename}</span>`;
+}
+
+function renderSiteList(){
+  const el = document.getElementById('siteList');
+  el.innerHTML = '';
+  sites.forEach(site=>{
+    const row = document.createElement('div');
+    row.className = 'site-row';
+    row.innerHTML = `
+      <span class="swatch" style="background:${site.color}"></span>
+      <span class="name">${site.name}</span>
+      <button class="del" data-id="${site.id}" title="Remove">&times;</button>
+    `;
+    el.appendChild(row);
+  });
+  el.querySelectorAll('button.del').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const id = +e.target.dataset.id;
+      const site = sites.find(s=>s.id===id);
+      if(site){
+        if(site.siteLayer) map.removeLayer(site.siteLayer);
+        (site.catchmentLayers || []).forEach(l=>map.removeLayer(l));
+        (site.lmrLayers || []).forEach(l=>map.removeLayer(l));
+      }
+      sites = sites.filter(s=>s.id!==id);
+      renderSiteList();
+    });
+  });
+}
+
+function fitMapToSites(){
+  const layers = sites.map(s=>L.geoJSON(s.geom));
+  if(!layers.length) return;
+  const group = L.featureGroup(layers);
+  map.fitBounds(group.getBounds(), { padding:[40,40] });
+}
+
+/* =========================================================
+   Street network via OpenStreetMap's Overpass API — the same
+   backend QuickOSM uses. Esri's public World_Transportation
+   service is a pre-rendered tile basemap (no Query capability),
+   so there's no ArcGIS equivalent to pull real road geometry/names
+   from — Overpass is the only practical free source for this.
+========================================================= */
+// Multiple public instances, tried in order. Every overpass-api.de
+// subdomain (bare and lz4) is deliberately excluded — confirmed via a
+// plain direct browser request (no app/proxy/headers involved) to return
+// the identical hard Apache mod_negotiation 406 on both, so it's a
+// problem across that whole operator's infrastructure right now, not
+// anything request-specific; retrying any of their hosts wastes time for
+// zero chance of success. overpass.private.coffee is a different,
+// independent community mirror (untested against this app so far — if it
+// also fails, that failure is new information, not a repeat of the same
+// overpass-api.de issue).
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
+
+// Ways considered walkable — excludes motorways/trunk roads (not walkable)
+// and anything explicitly tagged as foot- or access-restricted.
+const OSM_WALKABLE_FILTER = 'way["highway"]["highway"!~"^(motorway|motorway_link|trunk|trunk_link|construction|proposed|raceway|razed)$"]["foot"!~"^(no|private)$"]["access"!~"^(private|no)$"]';
+
+function largestRing(geom){
+  const rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p => p[0]);
+  return rings.reduce((a,b) => b.length > a.length ? b : a);
+}
+
+// Overpass's "poly" filter wants "lat lon lat lon ..." (space-separated, lat first)
+function ringToOverpassPoly(ring){
+  return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
+}
+
+// Shared POST helper — surfaces the actual response body on failure (an
+// HTTP status alone, e.g. a bare "406", isn't enough to diagnose against a
+// service this app can't be tested live against) and sends an explicit
+// Accept header, since some servers 406 a request that omits one entirely
+// (which fetch() doesn't add by default, unlike a browser's own navigation).
+// 20s wasn't enough for a real (if loaded) mirror processing a ~3km-wide
+// query area — Overpass's own internal timeout on this class of query
+// took closer to a minute before it self-reported as busy. Set slightly
+// above the local proxy's own 90s backend timeout (cors-proxy.py) so the
+// browser doesn't give up first and mask a response that was about to
+// arrive.
+const OVERPASS_PER_ENDPOINT_TIMEOUT_MS = 95000;
+
+/* =========================================================
+   Debug log — every Overpass query and its exact response/error,
+   visible in the sidebar and copyable as plain text, so a failure
+   can be pasted back verbatim instead of retyped from an error card.
+========================================================= */
+function debugLog(line){
+  const el = document.getElementById('debugLog');
+  const stamp = new Date().toLocaleTimeString();
+  el.textContent += `[${stamp}] ${line}\n\n`;
+  el.scrollTop = el.scrollHeight;
+}
+document.getElementById('copyDebugLog').addEventListener('click', ()=>{
+  navigator.clipboard.writeText(document.getElementById('debugLog').textContent);
+  const btn = document.getElementById('copyDebugLog');
+  const original = btn.textContent;
+  btn.textContent = 'Copied';
+  setTimeout(()=> btn.textContent = original, 1200);
+});
+document.getElementById('clearDebugLog').addEventListener('click', ()=>{
+  document.getElementById('debugLog').textContent = '';
+});
+
+async function postOverpassQuery(query){
+  const attempts = [];
+  for(const endpoint of OVERPASS_ENDPOINTS){
+    const proxiedUrl = withProxy(endpoint);
+    debugLog(`REQUEST → ${proxiedUrl}\nQUERY:\n${query}`);
+    const controller = new AbortController();
+    const timer = setTimeout(()=> controller.abort(), OVERPASS_PER_ENDPOINT_TIMEOUT_MS);
+    try{
+      const resp = await fetch(proxiedUrl, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json,text/plain,*/*' },
+        body: 'data=' + encodeURIComponent(query),
+        signal: controller.signal
+      });
+      if(!resp.ok){
+        const bodyText = await resp.text().catch(()=> '');
+        throw new Error(`HTTP ${resp.status}${bodyText ? ' — ' + bodyText.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,200) : ''}`);
+      }
+      const json = await resp.json();
+      debugLog(`RESPONSE ← ${endpoint}\nHTTP ${resp.status} OK — ${(json.elements||[]).length} element(s)`);
+      return json;
+    }catch(err){
+      // Covers all three failure modes: HTTP error status (thrown above),
+      // AbortError (per-endpoint timeout), and a network-level failure
+      // (e.g. "Failed to fetch") that never reaches a response at all —
+      // every one of them gets logged here, not just a subset.
+      const msg = err.name === 'AbortError' ? `timed out after ${OVERPASS_PER_ENDPOINT_TIMEOUT_MS/1000}s` : err.message;
+      debugLog(`RESPONSE ← ${endpoint}\n${msg}`);
+      attempts.push(`${endpoint}: ${msg}`);
+      console.warn(`Overpass endpoint ${endpoint} failed, trying next.`, err);
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(`All Overpass endpoints failed — ${attempts.join(' | ')}`);
+}
+
+async function fetchWalkableNetwork(queryGeom){
+  const poly = ringToOverpassPoly(largestRing(queryGeom));
+  const query = `[out:json][timeout:30];${OSM_WALKABLE_FILTER}(poly:"${poly}");out geom;`;
+  const json = await postOverpassQuery(query);
+  return (json.elements || []).filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
+}
+
+// Arterial/classified roads (a proxy via OSM's own road hierarchy tags —
+// primary/secondary/trunk — since the authoritative TfNSW "classified roads"
+// dataset isn't available here) and formal pedestrian crossings (marked
+// crossings and traffic signals), for the LMR restricted-crossing scenario.
+const OSM_ARTERIAL_FILTER = 'way["highway"~"^(primary|primary_link|secondary|secondary_link|trunk|trunk_link)$"]';
+const OSM_CROSSING_FILTER = '(node["highway"="crossing"]["crossing"!~"^(no|informal)$"];node["highway"="traffic_signals"];)';
+
+async function fetchArterialAndCrossings(queryGeom){
+  const poly = ringToOverpassPoly(largestRing(queryGeom));
+  const query = `[out:json][timeout:30];(${OSM_ARTERIAL_FILTER}(poly:"${poly}");${OSM_CROSSING_FILTER}(poly:"${poly}"););out geom;`;
+  const json = await postOverpassQuery(query);
+  const elements = json.elements || [];
+  const arterialWays = elements.filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1);
+  const crossingNodes = elements.filter(el => el.type === 'node' && typeof el.lat === 'number').map(el => ({ lat: el.lat, lon: el.lon }));
+  return { arterialWays, crossingNodes };
+}
+
+/* =========================================================
+   Graph + Dijkstra — nodes are deduplicated by rounded coordinate
+   (OSM shares the exact same lat/lon at a junction, so this reliably
+   detects where ways connect without needing raw node IDs), edges
+   weighted by haversine distance in metres.
+========================================================= */
+function haversine(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const toRad = d => d*Math.PI/180;
+  const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function buildGraph(ways){
+  const nodes = new Map();
+  const nodeKey = (lat, lon) => lat.toFixed(6)+','+lon.toFixed(6);
+  const getNode = (lat, lon) => {
+    const k = nodeKey(lat, lon);
+    if(!nodes.has(k)) nodes.set(k, { lat, lon, edges: [] });
+    return k;
+  };
+  ways.forEach(el=>{
+    for(let i=0;i<el.geometry.length-1;i++){
+      const a = el.geometry[i], b = el.geometry[i+1];
+      const ka = getNode(a.lat, a.lon), kb = getNode(b.lat, b.lon);
+      if(ka === kb) continue;
+      const dist = haversine(a.lat, a.lon, b.lat, b.lon);
+      nodes.get(ka).edges.push({ to: kb, dist });
+      nodes.get(kb).edges.push({ to: ka, dist });
+    }
+  });
+  return nodes;
+}
+
+function nearestNode(nodes, lat, lon){
+  let best = null, bestDist = Infinity;
+  nodes.forEach((n, k)=>{
+    const d = haversine(lat, lon, n.lat, n.lon);
+    if(d < bestDist){ bestDist = d; best = k; }
+  });
+  return { key: best, dist: bestDist };
+}
+
+// Array-based priority queue — fine for the node counts a ~1200m
+// pedestrian-network buffer produces (typically hundreds to low
+// thousands); a binary heap would be the next optimisation if a very
+// dense urban network ever makes this noticeably slow.
+// blockedNodes (optional): a Set of node keys that can't be routed through —
+// used by the LMR restricted-crossing scenario. Returns {dist, prev} so a
+// specific shortest-path route can be reconstructed, not just its length.
+function dijkstra(nodes, startKey, maxDist, blockedNodes){
+  const dist = new Map();
+  const prev = new Map();
+  dist.set(startKey, 0);
+  const visited = new Set();
+  const pq = [[0, startKey]];
+  while(pq.length){
+    pq.sort((a,b)=>a[0]-b[0]);
+    const [d, u] = pq.shift();
+    if(visited.has(u)) continue;
+    visited.add(u);
+    if(d > maxDist) continue;
+    const node = nodes.get(u);
+    if(!node) continue;
+    node.edges.forEach(({to, dist:w})=>{
+      if(blockedNodes && blockedNodes.has(to)) return; // can't route through a blocked crossing
+      const nd = d + w;
+      if(nd > maxDist) return;
+      if(!dist.has(to) || nd < dist.get(to)){
+        dist.set(to, nd);
+        prev.set(to, u);
+        pq.push([nd, to]);
+      }
+    });
+  }
+  return { dist, prev };
+}
+
+function reconstructPath(prev, startKey, endKey){
+  if(startKey === endKey) return [startKey];
+  const path = [endKey];
+  let cur = endKey;
+  while(cur !== startKey){
+    if(!prev.has(cur)) return null; // unreachable
+    cur = prev.get(cur);
+    path.push(cur);
+  }
+  return path.reverse();
+}
+
+function pathToLineString(nodes, path){
+  return { type:'LineString', coordinates: path.map(k => { const n = nodes.get(k); return [n.lon, n.lat]; }) };
+}
+
+/* =========================================================
+   Arterial-crossing restriction (LMR mode) — a graph node lying on/very
+   near an arterial way is a point where a pedestrian would cross it; if
+   that point isn't also near a tagged pedestrian crossing/signal, block
+   routing through it entirely in the restricted scenario. Validated
+   offline against a synthetic grid split by an arterial with one legal
+   crossing — the restricted route correctly detours through it.
+========================================================= */
+function findBlockedNodes(nodes, arterialWays, crossingNodes, onRoadTolM, safeTolM){
+  const arterialLines = arterialWays.map(w => turf.lineString(w.geometry.map(p=>[p.lon,p.lat])));
+  const blocked = new Set();
+  nodes.forEach((n, k)=>{
+    const p = turf.point([n.lon, n.lat]);
+    const onArterial = arterialLines.some(line => turf.pointToLineDistance(p, line, { units:'kilometers' }) * 1000 <= onRoadTolM);
+    if(!onArterial) return;
+    const nearSafe = crossingNodes.some(c => haversine(n.lat, n.lon, c.lat, c.lon) <= safeTolM);
+    if(!nearSafe) blocked.add(k);
+  });
+  return blocked;
+}
+
+const ARTERIAL_ON_ROAD_TOLERANCE_M = 3;  // how close a footway node must be to an arterial way's line to count as touching it
+const SAFE_CROSSING_TOLERANCE_M = 20;    // how close that point must be to a tagged crossing/signal to count as safe
+
+/* =========================================================
+   LMR yield — Housing SEPP s180 non-discretionary FSR standards,
+   applied to a site's own area (not the catchment area) since
+   classification under s163 is all-or-nothing per site.
+========================================================= */
+const LMR_INNER_FSR = 2.2, LMR_OUTER_FSR = 1.5;
+function classifyLmr(distanceM){
+  if(distanceM === undefined || distanceM === null) return 'unreachable';
+  if(distanceM <= 400) return 'inner';
+  if(distanceM <= 800) return 'outer';
+  return 'none';
+}
+function indicativeYield(siteAreaM2, classification, avgDwellingM2){
+  const fsr = classification === 'inner' ? LMR_INNER_FSR : classification === 'outer' ? LMR_OUTER_FSR : 0;
+  if(!fsr) return 0;
+  return Math.floor((siteAreaM2 * fsr) / avgDwellingM2);
+}
+function classificationLabel(c){
+  return c==='inner' ? 'Inner area (≤400m)' : c==='outer' ? 'Outer area (400–800m)' : c==='unreachable' ? 'Unreachable on network' : 'Outside LMR area (>800m)';
+}
+
+// Every edge with at least one reachable endpoint, trimmed (by linear
+// interpolation) to exactly the threshold distance where it crosses it.
+function edgesAtThreshold(nodes, dist, threshold){
+  const segments = [];
+  const seen = new Set();
+  nodes.forEach((node, u)=>{
+    const du = dist.get(u);
+    if(du === undefined || du > threshold) return;
+    node.edges.forEach(({to:v, dist:w})=>{
+      const edgeKey = u < v ? u+'|'+v : v+'|'+u;
+      if(seen.has(edgeKey)) return;
+      seen.add(edgeKey);
+      const nodeV = nodes.get(v);
+      const dv = dist.get(v);
+      if(dv !== undefined && dv <= threshold){
+        segments.push([[node.lon, node.lat], [nodeV.lon, nodeV.lat]]);
+      } else {
+        const remaining = threshold - du;
+        const t = Math.max(0, Math.min(1, remaining / w));
+        const midLat = node.lat + (nodeV.lat - node.lat) * t;
+        const midLon = node.lon + (nodeV.lon - node.lon) * t;
+        segments.push([[node.lon, node.lat], [midLon, midLat]]);
+      }
+    });
+  });
+  return segments;
+}
+
+// Buffers the reachable street corridor into a polygon, then unions in
+// the site polygon itself so the catchment always fully covers the site
+// (not just a thin corridor starting at whichever node it snapped to).
+function isochronePolygon(segments, corridorM, siteGeom){
+  const parts = [];
+  if(segments.length){
+    const mls = { type:'Feature', properties:{}, geometry:{ type:'MultiLineString', coordinates: segments } };
+    parts.push(turf.buffer(mls, corridorM/1000, { units:'kilometers', steps:8 }));
+  }
+  parts.push(turf.buffer(turf.feature(siteGeom), corridorM/1000, { units:'kilometers', steps:8 }));
+  let merged = parts[0];
+  for(let i=1;i<parts.length;i++){
+    try{ merged = turf.union(merged, parts[i]); }
+    catch(e){ /* keep what we have if a union fails on a bad geometry */ }
+  }
+  return merged;
+}
+
+/* =========================================================
+   Generate catchments for every site
+========================================================= */
+document.getElementById('runCatchments').addEventListener('click', runCatchments);
+
+async function runCatchments(){
+  if(!sites.length){ alert('Upload at least one site polygon first.'); return; }
+  const maxDistance = Math.max(1, +document.getElementById('maxDistance').value || 1200);
+  const interval = Math.max(1, +document.getElementById('interval').value || 400);
+  const corridorWidth = Math.max(1, +document.getElementById('corridorWidth').value || 20);
+  const thresholds = [];
+  for(let t=interval; t<maxDistance; t+=interval) thresholds.push(t);
+  thresholds.push(maxDistance);
+
+  const btn = document.getElementById('runCatchments');
+  const statusEl = document.getElementById('runStatus');
+  btn.disabled = true;
+  document.getElementById('loadingOverlay').classList.add('show');
+  statusEl.innerHTML = '';
+
+  const resultsEl = document.getElementById('resultsList');
+  resultsEl.innerHTML = '';
+  document.getElementById('resultsSection').style.display = 'block';
+
+  for(const site of sites){
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    resultsEl.appendChild(card);
+
+    site.catchmentLayers.forEach(l=>map.removeLayer(l));
+    site.catchmentLayers = [];
+    drawSiteBoundary(site); // re-drawn regardless of whether the fetch below succeeds
+
+    try{
+      const centroid = turf.centroid(turf.feature(site.geom)).geometry.coordinates; // [lon, lat]
+
+      // Query area: a plain circle around the site centroid, radius = max distance
+      // plus a safety margin. Deliberately NOT the site's own (possibly very
+      // detailed — DA/SSDA boundaries can run to hundreds of vertices) outline
+      // buffered outward, which produces an oversized Overpass "poly" filter
+      // that gets rejected outright (HTTP 406) — a circle has a small, fixed
+      // vertex count regardless of the site shape's complexity, and is just as
+      // good a query area since it only needs to safely cover the catchment radius.
+      const queryArea = turf.circle(centroid, (maxDistance * 1.3) / 1000, { units:'kilometers', steps:32 });
+      const ways = await fetchWalkableNetwork(queryArea.geometry);
+      if(!ways.length) throw new Error('No walkable streets/footpaths found from OpenStreetMap near this site.');
+
+      const nodes = buildGraph(ways);
+      const { key: startKey, dist: snapDist } = nearestNode(nodes, centroid[1], centroid[0]);
+      if(!startKey) throw new Error('Could not find a network node to start from.');
+
+      const { dist } = dijkstra(nodes, startKey, maxDistance);
+
+      site.catchments = thresholds.map(threshold=>{
+        const segments = edgesAtThreshold(nodes, dist, threshold);
+        const poly = isochronePolygon(segments, corridorWidth, site.geom);
+        return { threshold, feature: poly ? { type:'Feature', properties:{ site: site.name, distance_m: threshold }, geometry: poly.geometry } : null };
+      }).filter(c => c.feature);
+
+      // Draw largest-first so smaller (closer) catchments render on top
+      [...site.catchments].reverse().forEach((c, idx)=>{
+        const shade = 0.25 + 0.5 * (idx / Math.max(1, site.catchments.length-1));
+        const layer = L.geoJSON(c.feature, {
+          style:{ color: site.color, weight:1.5, fillColor: site.color, fillOpacity: shade * 0.5 }
+        }).addTo(map);
+        layer.bindTooltip(`${site.name} — ${c.threshold}m walk`, { sticky:true });
+        site.catchmentLayers.push(layer);
+      });
+
+      card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+        <div class="rc-body">${site.catchments.length} catchment(s): ${site.catchments.map(c=>c.threshold+'m').join(', ')}. Snapped to street network ${snapDist.toFixed(0)}m from site centroid.</div>`;
+
+    }catch(err){
+      site.catchments = null;
+      card.classList.add('error');
+      card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+        <div class="rc-body">Could not generate catchments (${err.message}).</div>`;
+    }
+  }
+
+  renderLegend(thresholds);
+  renderExportList();
+
+  btn.disabled = false;
+  document.getElementById('loadingOverlay').classList.remove('show');
+}
+
+/* =========================================================
+   LMR compliance check — site-to-reference-point walking distance,
+   unrestricted vs. arterial-crossing-restricted, per Housing SEPP
+   Sch 10 / Ch 6 and Metis Developments Pty Ltd v Mosman Municipal
+   Council [2026] NSWLEC 1610.
+========================================================= */
+document.getElementById('runLmrCheck').addEventListener('click', runLmrCheck);
+
+let lmrResults = []; // per-site result objects, for export
+
+async function runLmrCheck(){
+  if(!refPoint){ alert('Set a reference point (Town Centre / station) first.'); return; }
+  if(!sites.length){ alert('Upload at least one site polygon first.'); return; }
+  const avgDwellingM2 = Math.max(1, +document.getElementById('avgDwellingSize').value || 85);
+
+  const btn = document.getElementById('runLmrCheck');
+  const statusEl = document.getElementById('lmrRunStatus');
+  btn.disabled = true;
+  document.getElementById('loadingOverlay').classList.add('show');
+  statusEl.innerHTML = '';
+
+  const resultsEl = document.getElementById('lmrResultsList');
+  resultsEl.innerHTML = '';
+  document.getElementById('lmrResultsSection').style.display = 'block';
+
+  sites.forEach(s=>{
+    (s.lmrLayers || []).forEach(l=>map.removeLayer(l));
+    s.lmrLayers = [];
+  });
+  lmrResults = [];
+
+  try{
+    // Query area: a circle covering the reference point and every site,
+    // sized to the farthest site plus the 800m outer LMR threshold and a
+    // safety margin — see the walkability-catchment mode for why a circle
+    // (not a buffered site outline) is used for the Overpass query area.
+    const maxSiteDistKm = Math.max(0, ...sites.map(s=>{
+      const c = turf.centroid(turf.feature(s.geom)).geometry.coordinates;
+      return turf.distance(turf.point(refPoint), turf.point(c), { units:'kilometers' });
+    }));
+    const queryRadiusKm = (maxSiteDistKm*1000 + 800) * 1.3 / 1000;
+    const queryArea = turf.circle(refPoint, queryRadiusKm, { units:'kilometers', steps:32 });
+
+    const ways = await fetchWalkableNetwork(queryArea.geometry);
+    if(!ways.length) throw new Error('No walkable streets/footpaths found from OpenStreetMap near the reference point.');
+    const { arterialWays, crossingNodes } = await fetchArterialAndCrossings(queryArea.geometry);
+
+    const nodes = buildGraph(ways);
+    const blockedNodes = findBlockedNodes(nodes, arterialWays, crossingNodes, ARTERIAL_ON_ROAD_TOLERANCE_M, SAFE_CROSSING_TOLERANCE_M);
+
+    const { key: refKey } = nearestNode(nodes, refPoint[1], refPoint[0]);
+    if(!refKey) throw new Error('Could not find a street network node near the reference point.');
+
+    const maxCap = 1500; // beyond the 800m outer threshold, generous enough that a real reclassification isn't cut off
+    const unrestricted = dijkstra(nodes, refKey, maxCap, null);
+    const restricted = dijkstra(nodes, refKey, maxCap, blockedNodes);
+
+    if(refPointMarker) map.removeLayer(refPointMarker);
+    refPointMarker = L.circleMarker([refPoint[1], refPoint[0]], { pane:'refPane', radius:7, color:'#000', weight:2, fillColor:'#FFD400', fillOpacity:1 }).addTo(map);
+    refPointMarker.bindTooltip('Reference point (Town Centre / Station)', { permanent:false });
+
+    for(const site of sites){
+      const card = document.createElement('div');
+      card.className = 'result-card';
+      resultsEl.appendChild(card);
+      site.lmrLayers = [];
+
+      try{
+        // Per the judgment, distance is measured from the site's closest
+        // edge to the route, not its centroid.
+        const ring = turf.polygonToLine(turf.feature(site.geom));
+        const nearestOnSite = turf.nearestPointOnLine(ring, turf.point(refPoint));
+        const siteAnchor = nearestOnSite.geometry.coordinates;
+        const { key: siteKey } = nearestNode(nodes, siteAnchor[1], siteAnchor[0]);
+
+        const distU = unrestricted.dist.get(siteKey);
+        const distR = restricted.dist.get(siteKey);
+        const classU = classifyLmr(distU);
+        const classR = classifyLmr(distR);
+
+        const siteAreaM2 = turf.area(turf.feature(site.geom));
+        const yieldU = indicativeYield(siteAreaM2, classU, avgDwellingM2);
+        const yieldR = indicativeYield(siteAreaM2, classR, avgDwellingM2);
+
+        const pathU = distU !== undefined ? reconstructPath(unrestricted.prev, refKey, siteKey) : null;
+        const pathR = distR !== undefined ? reconstructPath(restricted.prev, refKey, siteKey) : null;
+
+        // Unrestricted route dashed, restricted route solid, same site colour —
+        // visually distinct where the two diverge.
+        if(pathU){
+          const lineU = L.geoJSON(pathToLineString(nodes, pathU), { style:{ color:site.color, weight:3, dashArray:'6,6', opacity:0.85 } }).addTo(map);
+          lineU.bindTooltip(`${site.name} — unrestricted: ${distU.toFixed(0)}m`, { sticky:true });
+          site.lmrLayers.push(lineU);
+        }
+        if(pathR){
+          const lineR = L.geoJSON(pathToLineString(nodes, pathR), { style:{ color:site.color, weight:3, opacity:0.95 } }).addTo(map);
+          lineR.bindTooltip(`${site.name} — restricted: ${distR.toFixed(0)}m`, { sticky:true });
+          site.lmrLayers.push(lineR);
+        }
+        drawSiteBoundary(site); // already drawn on upload — just make sure it's still on top after the route lines
+
+        const changed = classU !== classR;
+        const geomU = pathU ? pathToLineString(nodes, pathU) : null;
+        const geomR = pathR ? pathToLineString(nodes, pathR) : null;
+        lmrResults.push({ site, distU, distR, classU, classR, yieldU, yieldR, geomU, geomR, siteAreaM2 });
+
+        card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}${changed ? '<span style="margin-left:auto;background:var(--amber-soft);color:#6b4d14;border-radius:8px;padding:2px 7px;font-size:10.5px;font-weight:600;">reclassified</span>' : ''}</div>
+          <div class="rc-body">
+            <b>Unrestricted</b> (dashed route): ${distU !== undefined ? distU.toFixed(0)+'m' : 'unreachable within 1500m'} — ${classificationLabel(classU)} — indicative yield ${yieldU} dwellings<br>
+            <b>Restricted</b> (solid route — arterial crossings only at signals/marked crossings): ${distR !== undefined ? distR.toFixed(0)+'m' : 'unreachable within 1500m'} — ${classificationLabel(classR)} — indicative yield ${yieldR} dwellings<br>
+            ${changed ? `<b style="color:var(--red);">Yield impact: ${yieldR-yieldU >= 0 ? '+' : ''}${yieldR-yieldU} dwellings</b>` : `Yield impact: none (both ${classificationLabel(classU)})`}
+          </div>`;
+      }catch(err){
+        card.classList.add('error');
+        card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${site.color}"></span>${site.name}</div>
+          <div class="rc-body">Could not compute (${err.message}).</div>`;
+      }
+    }
+
+    renderLmrExportList();
+
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+    document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+function renderLmrExportList(){
+  const el = document.getElementById('lmrExportList');
+  el.innerHTML = '';
+  document.getElementById('lmrExportSection').style.display = lmrResults.length ? 'block' : 'none';
+  lmrResults.forEach(r=>{
+    const slug = r.site.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+    const row = document.createElement('div');
+    row.className = 'export-row';
+    row.innerHTML = `<span class="name">${r.site.name} routes</span><button data-geo>GeoJSON</button>`;
+    el.appendChild(row);
+    row.querySelector('[data-geo]').addEventListener('click', ()=>{
+      const features = [];
+      if(r.geomU) features.push({ type:'Feature', properties:{ site:r.site.name, scenario:'unrestricted', distance_m:r.distU, classification:r.classU, indicative_yield:r.yieldU }, geometry:r.geomU });
+      if(r.geomR) features.push({ type:'Feature', properties:{ site:r.site.name, scenario:'restricted', distance_m:r.distR, classification:r.classR, indicative_yield:r.yieldR }, geometry:r.geomR });
+      downloadBlob(slug + '_lmr_routes.geojson', JSON.stringify({ type:'FeatureCollection', features }), 'application/geo+json');
+    });
+  });
+}
+
+document.getElementById('downloadLmrCsv').addEventListener('click', ()=>{
+  const header = ['site','site_area_m2','unrestricted_distance_m','unrestricted_classification','unrestricted_yield','restricted_distance_m','restricted_classification','restricted_yield','yield_impact','reclassified'];
+  const esc = v => { const s = String(v===undefined||v===null?'':v).replace(/"/g,'""'); return /[",\n]/.test(s) ? `"${s}"` : s; };
+  const rows = lmrResults.map(r => [
+    r.site.name, r.siteAreaM2.toFixed(0),
+    r.distU !== undefined ? r.distU.toFixed(0) : 'unreachable', r.classU, r.yieldU,
+    r.distR !== undefined ? r.distR.toFixed(0) : 'unreachable', r.classR, r.yieldR,
+    r.yieldR - r.yieldU, r.classU !== r.classR ? 'yes' : 'no'
+  ].map(esc).join(','));
+  downloadBlob('lmr_comparison.csv', [header.join(','), ...rows].join('\n'), 'text/csv');
+});
+
+function renderLegend(thresholds){
+  const box = document.getElementById('legendBox');
+  if(!thresholds.length){ box.style.display = 'none'; return; }
+  box.innerHTML = `<div style="font-weight:600;margin-bottom:2px;">Walking distance</div>` +
+    thresholds.map((t,i)=>{
+      const shade = 0.25 + 0.5 * (1 - i / Math.max(1, thresholds.length-1));
+      return `<div class="lg-row"><span class="lg-swatch" style="background:rgba(59,85,103,${shade});"></span><span>${t}m</span></div>`;
+    }).join('');
+  box.style.display = 'block';
+}
+
+/* =========================================================
+   Export — GeoJSON / Shapefile per catchment, plus a bulk zip.
+   Shapefile writer, QML styling, and downloadBlob are copied
+   verbatim from GroundPatch (index.html) — generic utility code,
+   not specific to that tool.
+========================================================= */
+function downloadBlob(filename, content, type){
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 2000);
+}
+
+function shpShapeTypeFor(geomType){ return /Polygon/.test(geomType) ? 5 : 3; }
+
+function ringsFromGeometry(geom){
+  if(geom.type === 'Polygon') return geom.coordinates;
+  if(geom.type === 'MultiPolygon') return geom.coordinates.flat();
+  if(geom.type === 'LineString') return [geom.coordinates];
+  if(geom.type === 'MultiLineString') return geom.coordinates;
+  return [];
+}
+
+function writeShpHeader(dv, shapeType, fileLenWords, xmin, ymin, xmax, ymax){
+  dv.setInt32(0, 9994, false);
+  dv.setInt32(24, fileLenWords, false);
+  dv.setInt32(28, 1000, true);
+  dv.setInt32(32, shapeType, true);
+  dv.setFloat64(36, xmin, true);
+  dv.setFloat64(44, ymin, true);
+  dv.setFloat64(52, xmax, true);
+  dv.setFloat64(60, ymax, true);
+}
+
+function buildShpAndShx(features){
+  const geomType = features[0].geometry.type;
+  const shapeType = shpShapeTypeFor(geomType);
+  let xmin=Infinity, ymin=Infinity, xmax=-Infinity, ymax=-Infinity;
+  const recordContents = [];
+
+  features.forEach(f=>{
+    const rings = ringsFromGeometry(f.geometry);
+    const parts = [];
+    const points = [];
+    rings.forEach(ring=>{
+      parts.push(points.length);
+      ring.forEach(([x,y])=>{
+        points.push([x,y]);
+        if(x<xmin)xmin=x; if(x>xmax)xmax=x;
+        if(y<ymin)ymin=y; if(y>ymax)ymax=y;
+      });
+    });
+    let fxmin=Infinity, fymin=Infinity, fxmax=-Infinity, fymax=-Infinity;
+    points.forEach(([x,y])=>{ if(x<fxmin)fxmin=x; if(x>fxmax)fxmax=x; if(y<fymin)fymin=y; if(y>fymax)fymax=y; });
+    const numParts = parts.length, numPoints = points.length;
+    const contentBytes = 4+32+4+4 + numParts*4 + numPoints*16;
+    const buf = new ArrayBuffer(contentBytes);
+    const dv = new DataView(buf);
+    let off = 0;
+    dv.setInt32(off, shapeType, true); off += 4;
+    dv.setFloat64(off, fxmin, true); off += 8;
+    dv.setFloat64(off, fymin, true); off += 8;
+    dv.setFloat64(off, fxmax, true); off += 8;
+    dv.setFloat64(off, fymax, true); off += 8;
+    dv.setInt32(off, numParts, true); off += 4;
+    dv.setInt32(off, numPoints, true); off += 4;
+    parts.forEach(p=>{ dv.setInt32(off, p, true); off += 4; });
+    points.forEach(([x,y])=>{ dv.setFloat64(off, x, true); off += 8; dv.setFloat64(off, y, true); off += 8; });
+    recordContents.push(buf);
+  });
+
+  const headerLen = 100;
+  let totalContentLen = 0;
+  recordContents.forEach(c => totalContentLen += 8 + c.byteLength);
+  const shpBuf = new ArrayBuffer(headerLen + totalContentLen);
+  const shpDv = new DataView(shpBuf);
+  writeShpHeader(shpDv, shapeType, (headerLen + totalContentLen)/2, xmin, ymin, xmax, ymax);
+
+  const shxBuf = new ArrayBuffer(headerLen + recordContents.length*8);
+  const shxDv = new DataView(shxBuf);
+  writeShpHeader(shxDv, shapeType, (headerLen + recordContents.length*8)/2, xmin, ymin, xmax, ymax);
+
+  let shpByteOffset = headerLen, shxOff = headerLen;
+  recordContents.forEach((content, i)=>{
+    const contentWords = content.byteLength / 2;
+    const recordOffsetWords = shpByteOffset / 2;
+    shxDv.setInt32(shxOff, recordOffsetWords, false); shxOff += 4;
+    shxDv.setInt32(shxOff, contentWords, false); shxOff += 4;
+    shpDv.setInt32(shpByteOffset, i+1, false); shpByteOffset += 4;
+    shpDv.setInt32(shpByteOffset, contentWords, false); shpByteOffset += 4;
+    new Uint8Array(shpBuf, shpByteOffset, content.byteLength).set(new Uint8Array(content));
+    shpByteOffset += content.byteLength;
+  });
+
+  return { shpBuf, shxBuf };
+}
+
+function buildDbf(features){
+  const rawKeys = [];
+  features.forEach(f=> Object.keys(f.properties||{}).forEach(k=>{ if(!rawKeys.includes(k)) rawKeys.push(k); }));
+  if(rawKeys.length === 0) rawKeys.push('id');
+
+  const usedNames = new Set();
+  const fieldMap = rawKeys.map(k=>{
+    let name = k.toUpperCase().replace(/[^A-Z0-9_]/g,'_').slice(0,10);
+    if(!name) name = 'FIELD';
+    let base = name, n = 1;
+    while(usedNames.has(name)){ name = (base.slice(0, 10-String(n).length) + n); n++; }
+    usedNames.add(name);
+    return { orig:k, name };
+  });
+
+  const fieldLengths = fieldMap.map(fm=>{
+    let maxLen = fm.name.length;
+    features.forEach(f=>{
+      const v = f.properties ? f.properties[fm.orig] : undefined;
+      const s = (v===null||v===undefined) ? '' : String(v);
+      if(s.length > maxLen) maxLen = s.length;
+    });
+    return Math.min(Math.max(maxLen,1), 254);
+  });
+
+  const numFields = fieldMap.length;
+  const numRecords = features.length;
+  const headerLen = 32 + numFields*32 + 1;
+  const recordLen = 1 + fieldLengths.reduce((a,b)=>a+b,0);
+  const totalLen = headerLen + recordLen*numRecords + 1;
+
+  const buf = new ArrayBuffer(totalLen);
+  const dv = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  const enc = new TextEncoder();
+
+  const now = new Date();
+  dv.setUint8(0, 0x03);
+  dv.setUint8(1, now.getFullYear()-1900);
+  dv.setUint8(2, now.getMonth()+1);
+  dv.setUint8(3, now.getDate());
+  dv.setUint32(4, numRecords, true);
+  dv.setUint16(8, headerLen, true);
+  dv.setUint16(10, recordLen, true);
+
+  let off = 32;
+  fieldMap.forEach((fm, i)=>{
+    bytes.set(enc.encode(fm.name).slice(0,10), off);
+    dv.setUint8(off+11, 0x43);
+    dv.setUint32(off+12, 0, true);
+    dv.setUint8(off+16, fieldLengths[i]);
+    dv.setUint8(off+17, 0);
+    off += 32;
+  });
+  dv.setUint8(off, 0x0D); off += 1;
+
+  features.forEach(f=>{
+    dv.setUint8(off, 0x20); off += 1;
+    fieldMap.forEach((fm, i)=>{
+      const v = f.properties ? f.properties[fm.orig] : undefined;
+      const s = (v===null||v===undefined) ? '' : String(v);
+      const len = fieldLengths[i];
+      const truncated = s.length > len ? s.slice(0,len) : s;
+      const strBytes = enc.encode(truncated).slice(0,len);
+      bytes.set(strBytes, off);
+      for(let j=strBytes.length;j<len;j++) bytes[off+j] = 0x20;
+      off += len;
+    });
+  });
+  dv.setUint8(off, 0x1A);
+  return buf;
+}
+
+const PRJ_WGS84 = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
+
+function buildShapefileParts(normalizedGeojson){
+  const features = normalizedGeojson.features.filter(f => f && f.geometry);
+  if(!features.length) throw new Error('No features to export');
+  const { shpBuf, shxBuf } = buildShpAndShx(features);
+  const dbfBuf = buildDbf(features);
+  return { shp: shpBuf, shx: shxBuf, dbf: dbfBuf, prj: PRJ_WGS84 };
+}
+
+function normalizeGeomType(fc){
+  const features = fc.features.map(f=>{
+    if(!f || !f.geometry) return f;
+    let geom = f.geometry;
+    if(geom.type === 'Polygon'){
+      geom = { type:'MultiPolygon', coordinates:[geom.coordinates] };
+    } else if(geom.type === 'LineString'){
+      geom = { type:'MultiLineString', coordinates:[geom.coordinates] };
+    }
+    return { type:'Feature', properties: f.properties, geometry: geom };
+  }).filter(Boolean);
+  return { type:'FeatureCollection', features };
+}
+
+function xmlEscape(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function parseColorToRgb(cssColor){
+  if(!cssColor) return [128,128,128];
+  if(cssColor.startsWith('#')){
+    const hex = cssColor.slice(1);
+    return [parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16)];
+  }
+  return [128,128,128];
+}
+function buildSymbolXML(id, rgb, opacity){
+  const [r,g,b] = rgb;
+  return `<symbol type="fill" name="${id}" alpha="${opacity}" force_rhr="0">
+    <layer class="SimpleFill" enabled="1">
+      <Option type="Map">
+        <Option type="QString" name="color" value="${r},${g},${b},255"/>
+        <Option type="QString" name="outline_color" value="${r},${g},${b},255"/>
+        <Option type="QString" name="outline_width" value="0.3"/>
+        <Option type="QString" name="outline_width_unit" value="MM"/>
+        <Option type="QString" name="style" value="solid"/>
+      </Option>
+    </layer>
+  </symbol>`;
+}
+function buildQML(color){
+  const [r,g,b] = parseColorToRgb(color);
+  return `<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.28" styleCategories="Symbology">
+  <renderer-v2 type="singleSymbol" forceraster="0" enableorderby="0">
+    <symbols>
+      ${buildSymbolXML(0, [r,g,b], 0.5)}
+    </symbols>
+  </renderer-v2>
+</qgis>`;
+}
+
+async function exportShapefile(geojson, filenameBase, color, btn){
+  const original = btn ? btn.textContent : null;
+  if(btn){ btn.disabled = true; btn.textContent = '…'; }
+  try{
+    const parts = buildShapefileParts(normalizeGeomType(geojson));
+    const zip = new JSZip();
+    zip.file(filenameBase + '.shp', parts.shp);
+    zip.file(filenameBase + '.shx', parts.shx);
+    zip.file(filenameBase + '.dbf', parts.dbf);
+    zip.file(filenameBase + '.prj', parts.prj);
+    zip.file(filenameBase + '.qml', buildQML(color));
+    const result = await zip.generateAsync({ type:'blob' });
+    downloadBlob(filenameBase + '.zip', result, 'application/zip');
+  }catch(err){
+    alert('Shapefile export failed (' + err.message + '). GeoJSON works reliably instead.');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+function renderExportList(){
+  const el = document.getElementById('exportList');
+  el.innerHTML = '';
+  const anyCatchments = sites.some(s=>s.catchments && s.catchments.length);
+  document.getElementById('exportSection').style.display = anyCatchments ? 'block' : 'none';
+  if(!anyCatchments) return;
+
+  sites.filter(s=>s.catchments && s.catchments.length).forEach(site=>{
+    site.catchments.forEach(c=>{
+      const slug = (site.name + '_' + c.threshold + 'm').replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+      const row = document.createElement('div');
+      row.className = 'export-row';
+      row.innerHTML = `<span class="name">${site.name} — ${c.threshold}m</span>
+        <button data-geo>GeoJSON</button>
+        <button data-shp>Shapefile</button>`;
+      el.appendChild(row);
+      row.querySelector('[data-geo]').addEventListener('click', ()=>{
+        downloadBlob(slug + '.geojson', JSON.stringify({ type:'FeatureCollection', features:[c.feature] }), 'application/geo+json');
+      });
+      row.querySelector('[data-shp]').addEventListener('click', (e)=>{
+        exportShapefile({ type:'FeatureCollection', features:[c.feature] }, slug, site.color, e.target);
+      });
+    });
+  });
+}
+
+document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
+  const btn = document.getElementById('downloadAllZip');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Zipping…';
+  try{
+    const masterZip = new JSZip();
+    let any = false;
+    for(const site of sites){
+      if(!site.catchments || !site.catchments.length) continue;
+      for(const c of site.catchments){
+        any = true;
+        const slug = (site.name + '_' + c.threshold + 'm').replace(/[^a-z0-9]+/gi,'_').toLowerCase();
+        const normalized = normalizeGeomType({ type:'FeatureCollection', features:[c.feature] });
+        const parts = buildShapefileParts(normalized);
+        const folder = masterZip.folder(slug);
+        folder.file(slug + '.shp', parts.shp);
+        folder.file(slug + '.shx', parts.shx);
+        folder.file(slug + '.dbf', parts.dbf);
+        folder.file(slug + '.prj', parts.prj);
+        folder.file(slug + '.qml', buildQML(site.color));
+        folder.file(slug + '.geojson', JSON.stringify({ type:'FeatureCollection', features:[c.feature] }));
+      }
+    }
+    if(!any){ alert('Nothing to export yet — generate catchments first.'); return; }
+    const result = await masterZip.generateAsync({ type:'blob' });
+    downloadBlob('stridepatch-catchments.zip', result, 'application/zip');
+  }catch(err){
+    alert('Zip export failed: ' + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = original;
+  }
+});
+</script>
+</body>
+</html>
