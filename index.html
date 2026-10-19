@@ -447,6 +447,15 @@
     </section>
 
     <section>
+      <h2>Cadastre search radius</h2>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="range" id="cadastreBufferSlider" min="100" max="2000" step="50" value="500" style="flex:1;accent-color:var(--moss);">
+        <span id="cadastreBufferLabel" style="font-size:12px;color:var(--ink-soft);min-width:52px;text-align:right;">500 m</span>
+      </div>
+      <p style="font-size:11px;color:var(--ink-soft);margin-top:4px;">How far beyond the site boundary to pull neighbouring lots (up to 2km). Updates the preview circle immediately — click "Fetch site data" to (re)download cadastre at this radius.</p>
+    </section>
+
+    <section>
       <h2>Layers to query</h2>
       <div id="layerList"></div>
       <button class="textbtn" id="showAddLayer">+ Add a layer</button>
@@ -590,11 +599,15 @@ let boundaryLayer = null;
 let boundaryGeom = null;   // GeoJSON geometry, Polygon or MultiPolygon, WGS84
 let assessmentGeom = null; // 5km rounded buffer — used for querying/clipping ecology layers
 let assessmentLayer = null;
-let contextGeom = null;    // 300m rounded buffer — used for context-only layers (e.g. cadastre)
+let contextGeom = null;    // rounded buffer for context-only layers (e.g. cadastre) — adjustable via the sidebar slider, up to 2km
 let contextLayer = null;
 const ASSESSMENT_BUFFER_KM = 5;
-const CONTEXT_BUFFER_KM = 0.5;
-function bufferGeomFor(lyr){ return lyr.bufferKm === CONTEXT_BUFFER_KM ? contextGeom : assessmentGeom; }
+let CONTEXT_BUFFER_KM = 0.5;
+// Matched on category rather than the current CONTEXT_BUFFER_KM value, since
+// that value now changes live via the cadastre radius slider - comparing
+// against a layer's bufferKm (set once at registry init) would silently
+// break as soon as the slider moved away from its default.
+function bufferGeomFor(lyr){ return lyr.cat === 'context' ? contextGeom : assessmentGeom; }
 
 /* =========================================================
    CORS proxy — spatialportalarcgis.dpie.nsw.gov.au and lmbc.nsw.gov.au
@@ -681,6 +694,15 @@ function renderLayerList(){
   });
 }
 renderLayerList();
+
+const cadastreBufferSlider = document.getElementById('cadastreBufferSlider');
+const cadastreBufferLabel = document.getElementById('cadastreBufferLabel');
+cadastreBufferSlider.addEventListener('input', ()=>{
+  const meters = +cadastreBufferSlider.value;
+  CONTEXT_BUFFER_KM = meters / 1000;
+  cadastreBufferLabel.textContent = meters + ' m';
+  rebuildContextBuffer();
+});
 
 document.getElementById('showAddLayer').addEventListener('click', ()=>{
   document.getElementById('addLayerForm').classList.toggle('open');
@@ -817,19 +839,29 @@ function loadGeometry(geom, filename){
   }).addTo(map);
   assessmentLayer.bindTooltip(ASSESSMENT_BUFFER_KM + 'km assessment buffer', { sticky:true });
 
-  const bufferC = turf.buffer(turf.feature(geom), CONTEXT_BUFFER_KM, { units:'kilometers', steps:32 });
-  contextGeom = bufferC.geometry;
-  if(contextLayer) map.removeLayer(contextLayer);
-  contextLayer = L.geoJSON(contextGeom, {
-    style:{ color:'#FFAA00', weight:1, fill:false, dashArray:'1,4' }
-  }).addTo(map);
-  contextLayer.bindTooltip((CONTEXT_BUFFER_KM*1000) + 'm context buffer (cadastre)', { sticky:true });
+  rebuildContextBuffer();
 
   map.fitBounds(assessmentLayer.getBounds(), { padding:[20,20] });
 
   const ha = polygonAreaHa(geom);
   fileStatus.innerHTML = `<span class="ok">Loaded ${filename} — approx. ${ha.toFixed(2)} ha, ${ASSESSMENT_BUFFER_KM}km + ${CONTEXT_BUFFER_KM*1000}m buffers created</span>`;
   document.getElementById('runQuery').disabled = false;
+}
+
+// Rebuilds just the cadastre-radius buffer (contextGeom/contextLayer) from
+// the already-loaded boundary and the current CONTEXT_BUFFER_KM - shared by
+// the initial file load and the cadastre radius slider, so moving the
+// slider after a boundary's already loaded updates the preview circle
+// immediately without needing to re-upload the file.
+function rebuildContextBuffer(){
+  if(!boundaryGeom) return;
+  const bufferC = turf.buffer(turf.feature(boundaryGeom), CONTEXT_BUFFER_KM, { units:'kilometers', steps:32 });
+  contextGeom = bufferC.geometry;
+  if(contextLayer) map.removeLayer(contextLayer);
+  contextLayer = L.geoJSON(contextGeom, {
+    style:{ color:'#FFAA00', weight:1, fill:false, dashArray:'1,4' }
+  }).addTo(map);
+  contextLayer.bindTooltip((CONTEXT_BUFFER_KM*1000) + 'm context buffer (cadastre)', { sticky:true });
 }
 
 /* =========================================================
@@ -1884,7 +1916,7 @@ document.getElementById('exportReportXlsx').addEventListener('click', ()=>{
 
   const boundaryFeature = turf.feature(boundaryGeom);
   const siteHa = polygonAreaHa(boundaryGeom);
-  const bufferLabel = lyr => lyr.bufferKm === CONTEXT_BUFFER_KM ? (CONTEXT_BUFFER_KM*1000)+'m' : ASSESSMENT_BUFFER_KM+'km';
+  const bufferLabel = lyr => lyr.cat === 'context' ? (CONTEXT_BUFFER_KM*1000)+'m' : ASSESSMENT_BUFFER_KM+'km';
 
   // Sheet 1 — does each layer actually touch the project area boundary,
   // as opposed to just being present somewhere in its buffer?
