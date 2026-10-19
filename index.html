@@ -743,6 +743,13 @@
       <div id="speciesSightingsResult" style="margin-top:8px;"></div>
     </section>
 
+    <section id="koalaSightingsSection" style="display:none;">
+      <h2>Koala sightings</h2>
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against the Koala Species Sightings layer within the assessment buffer, fetched independently of the main "Fetch site data" run.</p>
+      <button class="secondary" id="fetchKoalaSightings">Fetch koala sightings</button>
+      <div id="koalaFetchStatus" style="font-size:12px;margin-top:6px;"></div>
+    </section>
+
     <section id="figureSection" style="display:none;">
       <h2>Figure export</h2>
       <select id="platePreset" style="width:100%;font-family:inherit;font-size:12px;padding:7px 8px;border:1px solid var(--line);border-radius:2px;background:#fff;margin-bottom:8px;">
@@ -2190,7 +2197,7 @@ async function runAll(){
         </div>
         ${gj.truncated?'<div class="rc-body" style="color:var(--red);">Hit the 20,000-feature safety cap — results are incomplete.</div>':''}
         ${gj.partial?'<div class="rc-body" style="color:var(--red);">Some data failed to load after retrying — results may be incomplete. Try again, or check your connection to the proxy.</div>':''}
-        ${gj.unpaginatedFallback?`<div class="rc-body" style="color:var(--red);">Pagination failed for this layer — results may be capped at the server's default limit (often 1000). Reason: ${escapeHtml(gj.unpaginatedFallbackReason || 'unknown')}</div>`:''}`;
+        ${gj.unpaginatedFallback?`<div class="rc-body" style="color:var(--red);">Pagination failed for this layer — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</div>`:''}`;
 
       card.querySelector('[data-toggle]').addEventListener('change', e=>{
         if(e.target.checked){ lyr.mapLayerGroup.addTo(map); lyr.visible = true; }
@@ -2543,6 +2550,11 @@ function renderExportList(){
   document.getElementById('sightingsFetchStatus').textContent = '';
   document.getElementById('speciesSightingsResult').innerHTML = '';
   window.sightingsResult = null;
+
+  // Same reasoning again - the koala layer's own standalone fetch button
+  // (independent of "Fetch site data") also needs a fresh buffer.
+  document.getElementById('koalaSightingsSection').style.display = 'block';
+  document.getElementById('koalaFetchStatus').textContent = '';
 
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
@@ -4014,6 +4026,66 @@ async function fetchSpeciesSightingsForSite(){
   }
 }
 document.getElementById('fetchSpeciesSightings').addEventListener('click', fetchSpeciesSightingsForSite);
+
+// Reuses the Koala Species Sightings entry already in the `layers` registry
+// (same URL/id/colorMap it's queried with from "Fetch site data") so this
+// standalone button stays in sync with that definition rather than
+// duplicating it - it just lets you re-fetch/re-render that one layer
+// on its own, without re-querying every other checked layer too.
+function colorForKoalaYear(props){
+  const lyr = layers.find(l => l.name === 'Koala Species Sightings');
+  if(!lyr || !lyr.field || !lyr.colorMap) return (lyr && lyr.color) || '#C9893D';
+  const val = String((props || {})[lyr.field]);
+  return lyr.colorMap[val] || lyr.color;
+}
+
+async function fetchKoalaSightings(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const lyr = layers.find(l => l.name === 'Koala Species Sightings');
+  if(!lyr){ console.warn('Koala Species Sightings is not in the layer registry.'); return; }
+  const statusEl = document.getElementById('koalaFetchStatus');
+  const btn = document.getElementById('fetchKoalaSightings');
+  btn.disabled = true;
+  statusEl.textContent = 'Querying…';
+  try{
+    const rawGj = await queryLayer(lyr);
+    const gj = clipFeatureCollection(rawGj, bufferGeomFor(lyr));
+    gj.truncated = rawGj.truncated;
+    gj.unpaginatedFallback = rawGj.unpaginatedFallback;
+    gj.unpaginatedFallbackReason = rawGj.unpaginatedFallbackReason;
+    lyr.lastGeoJSON = gj;
+    lyr.on = true;
+    lyr.visible = true;
+
+    if(lyr.mapLayerGroup) map.removeLayer(lyr.mapLayerGroup);
+    lyr.mapLayerGroup = L.geoJSON(gj, {
+      pointToLayer:(f, latlng) => L.circleMarker(latlng, {
+        radius: 5,
+        color: colorForKoalaYear(f.properties),
+        weight: 1.5,
+        fillColor: colorForKoalaYear(f.properties),
+        fillOpacity: 0.75
+      }),
+      onEachFeature:(f, l)=>{
+        const rows = Object.entries(f.properties||{})
+          .filter(([k])=>!/^(shape|objectid)/i.test(k))
+          .slice(0,8)
+          .map(([k,v])=>`<div><b>${k}</b>: ${v}</div>`).join('');
+        l.bindPopup(`<div style="min-width:160px;"><div style="font-weight:600;margin-bottom:4px;">${lyr.name}</div>${rows}</div>`);
+      }
+    }).addTo(map);
+
+    const n = gj.features.length;
+    statusEl.innerHTML = `<span class="ok">Found ${n} koala sighting${n===1?'':'s'} within the ${ASSESSMENT_BUFFER_KM}km buffer.</span>` +
+      (gj.truncated ? '<br><span class="err">Hit the 20,000-feature safety cap — results are incomplete.</span>' : '') +
+      (gj.unpaginatedFallback ? `<br><span class="err">Pagination failed — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</span>` : '');
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('fetchKoalaSightings').addEventListener('click', fetchKoalaSightings);
 
 function renderSpeciesSightingsResult(result){
   const el = document.getElementById('speciesSightingsResult');
