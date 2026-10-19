@@ -2127,8 +2127,19 @@ async function runAll(){
           : { color: colorFor(f.properties), weight: weightFor(f.properties), fillColor: colorFor(f.properties), fillOpacity:0.6 };
       };
 
+      // Leaflet ignores the `style` option entirely for Point geometries -
+      // without pointToLayer it falls back to its default blue pin icon,
+      // which both looks out of place against every other layer's styled
+      // fills/outlines and ignores the layer's own colour entirely.
       const glayer = L.geoJSON(gj, {
         style: styleFn,
+        pointToLayer:(f, latlng) => L.circleMarker(latlng, {
+          radius: 5,
+          color: lyr.noCategorize ? lyr.color : colorFor(f.properties),
+          weight: 1.5,
+          fillColor: lyr.noCategorize ? lyr.color : colorFor(f.properties),
+          fillOpacity: 0.75
+        }),
         onEachFeature:(f, l)=>{
           const rows = Object.entries(f.properties||{})
             .filter(([k])=>!/^(shape|objectid)/i.test(k))
