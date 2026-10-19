@@ -1701,6 +1701,10 @@ async function attemptQueryLayer(lyr){
     try{
       const result = await queryLayerSimple(lyr);
       result.unpaginatedFallback = true;
+      // Surfaced in the result card itself, not just the console - so the
+      // real cause (a timeout, an HTTP error, a rejected field name, etc.)
+      // is visible without needing devtools open.
+      result.unpaginatedFallbackReason = err.message;
       return result;
     }catch(err2){
       if(needsProxy(lyr.url)){
@@ -2071,6 +2075,7 @@ async function runAll(){
       gj.truncated = rawGj.truncated;
       gj.partial = rawGj.partial;
       gj.unpaginatedFallback = rawGj.unpaginatedFallback;
+      gj.unpaginatedFallbackReason = rawGj.unpaginatedFallbackReason;
       gj.idsFound = rawGj.idsFound;
       lyr.lastGeoJSON = gj;
       const n = gj.features.length;
@@ -2185,7 +2190,7 @@ async function runAll(){
         </div>
         ${gj.truncated?'<div class="rc-body" style="color:var(--red);">Hit the 20,000-feature safety cap — results are incomplete.</div>':''}
         ${gj.partial?'<div class="rc-body" style="color:var(--red);">Some data failed to load after retrying — results may be incomplete. Try again, or check your connection to the proxy.</div>':''}
-        ${gj.unpaginatedFallback?'<div class="rc-body" style="color:var(--red);">Pagination failed for this layer — results may be capped at the server\'s default limit (often 1000).</div>':''}`;
+        ${gj.unpaginatedFallback?`<div class="rc-body" style="color:var(--red);">Pagination failed for this layer — results may be capped at the server's default limit (often 1000). Reason: ${escapeHtml(gj.unpaginatedFallbackReason || 'unknown')}</div>`:''}`;
 
       card.querySelector('[data-toggle]').addEventListener('change', e=>{
         if(e.target.checked){ lyr.mapLayerGroup.addTo(map); lyr.visible = true; }
@@ -2193,7 +2198,7 @@ async function runAll(){
       });
 
       const uniqueVals = [...new Set(attrSummary)].slice(0,6).join('; ');
-      return `${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?' [UNPAGINATED FALLBACK — may be capped]':''} — ${uniqueVals || 'see attributes'}`;
+      return `${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?` [UNPAGINATED FALLBACK — may be capped — reason: ${gj.unpaginatedFallbackReason || 'unknown'}]`:''} — ${uniqueVals || 'see attributes'}`;
 
     }catch(err){
       card.classList.add('error');
