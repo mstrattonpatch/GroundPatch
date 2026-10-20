@@ -511,6 +511,40 @@
   #qgisScriptCard .btn-row button:disabled{ background:#c9c4b4; color:#8a8577; cursor:not-allowed; border-color:#c9c4b4; }
   #qgisScriptCard .lock-hint{ font-size:11px; color:var(--ink-soft); text-align:center; margin:6px 0 0; }
 
+  /* ---------- Attribute table modal ---------- */
+  #attrTableModal{
+    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3300;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #attrTableModal.show{ display:flex; }
+  #attrTableCard{
+    background:var(--panel); border:1px solid var(--line); max-width:min(1100px, 96vw);
+    width:100%; max-height:90vh; padding:20px 20px 16px; display:flex; flex-direction:column;
+  }
+  #attrTableCard .at-head{ display:flex; align-items:center; gap:10px; margin-bottom:10px; flex:none; }
+  #attrTableCard h2{ font-size:15px; margin:0; font-weight:700; flex:1; min-width:0; }
+  #attrTableCard .at-count{ font-size:11.5px; color:var(--ink-soft); flex:none; }
+  #attrTableCard #attrTableFilter{
+    font-family:inherit; font-size:12px; padding:6px 10px; border:1px solid var(--line);
+    border-radius:2px; width:220px; flex:none;
+  }
+  #attrTableCard .at-close{
+    background:none; border:none; font-size:18px; line-height:1; cursor:pointer;
+    color:var(--ink-soft); flex:none; padding:0 2px;
+  }
+  #attrTableCard .at-close:hover{ color:var(--ink); }
+  #attrTableWrap{ overflow:auto; flex:1; min-height:0; border:1px solid var(--line); }
+  #attrTableWrap table{ border-collapse:collapse; font-size:11.5px; white-space:nowrap; }
+  #attrTableWrap th, #attrTableWrap td{ padding:5px 9px; border-bottom:1px solid var(--line); text-align:left; }
+  #attrTableWrap th{
+    background:var(--panel); position:sticky; top:0; cursor:pointer; user-select:none;
+    font-weight:700; color:var(--ink-soft); text-transform:uppercase; font-size:10px; letter-spacing:.02em;
+  }
+  #attrTableWrap th:hover{ color:var(--ink); }
+  #attrTableWrap th .sort-arrow{ opacity:.5; margin-left:3px; }
+  #attrTableWrap tr:hover td{ background:var(--moss-soft); }
+  #attrTableWrap tr.at-clickable{ cursor:pointer; }
+
   /* ---------- Biodiversity constraints modal ---------- */
   #bioConstraintsModal{
     position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3200;
@@ -600,6 +634,18 @@
       <button class="primary" id="copyQgisScript">Copy script</button>
     </div>
     <p class="lock-hint" id="qgisLockHint">Copy the script first — then Close unlocks.</p>
+  </div>
+</div>
+
+<div id="attrTableModal">
+  <div id="attrTableCard">
+    <div class="at-head">
+      <h2 id="attrTableTitle">Attribute table</h2>
+      <span class="at-count" id="attrTableCount"></span>
+      <input type="text" id="attrTableFilter" placeholder="Filter rows…">
+      <button class="at-close" id="closeAttrTable" title="Close">&times;</button>
+    </div>
+    <div id="attrTableWrap"></div>
   </div>
 </div>
 
@@ -2264,6 +2310,95 @@ function setMeasureActive(active){
 document.getElementById('measureToggleBtn').addEventListener('click', ()=> setMeasureActive(!measureActive));
 document.getElementById('measureClearBtn').addEventListener('click', clearMeasurement);
 
+/* =========================================================
+   Attribute table viewer — "View table" on any queried layer opens a
+   sortable, filterable table of its raw feature attributes, for quick
+   QA without opening QGIS. Capped at ATTR_TABLE_ROW_CAP rendered rows
+   for performance; the filter narrows which rows count toward that cap.
+========================================================= */
+const ATTR_TABLE_ROW_CAP = 1000;
+let attrTableState = { columns:[], rows:[], sortCol:null, sortDir:1 };
+
+function openAttributeTable(lyr){
+  if(!lyr.lastGeoJSON || !lyr.lastGeoJSON.features.length){ alert('No features to show for this layer.'); return; }
+  const features = lyr.lastGeoJSON.features;
+  const columnSet = new Set();
+  features.forEach(f=>{
+    Object.keys(f.properties || {}).forEach(k=>{ if(!/^(shape|objectid|fid)/i.test(k)) columnSet.add(k); });
+  });
+  attrTableState = {
+    columns: [...columnSet],
+    rows: features.map(f => ({ props: f.properties || {}, geometry: f.geometry })),
+    sortCol: null, sortDir: 1,
+  };
+  document.getElementById('attrTableTitle').textContent = lyr.name + ' — attribute table';
+  document.getElementById('attrTableFilter').value = '';
+  renderAttrTable();
+  document.getElementById('attrTableModal').classList.add('show');
+}
+
+function renderAttrTable(){
+  const { columns, rows, sortCol, sortDir } = attrTableState;
+  const filterText = document.getElementById('attrTableFilter').value.trim().toLowerCase();
+
+  let filtered = rows;
+  if(filterText){
+    filtered = rows.filter(r => columns.some(c => String(r.props[c] ?? '').toLowerCase().includes(filterText)));
+  }
+  if(sortCol){
+    filtered = [...filtered].sort((a,b)=>{
+      const av = a.props[sortCol], bv = b.props[sortCol];
+      const cmp = (typeof av === 'number' && typeof bv === 'number') ? av - bv : String(av ?? '').localeCompare(String(bv ?? ''));
+      return cmp * sortDir;
+    });
+  }
+
+  document.getElementById('attrTableCount').textContent =
+    filtered.length === rows.length ? `${rows.length} feature${rows.length===1?'':'s'}` : `${filtered.length} of ${rows.length}`;
+
+  const shown = filtered.slice(0, ATTR_TABLE_ROW_CAP);
+  const headHtml = columns.map(c=>{
+    const arrow = sortCol === c ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+    return `<th data-col="${escHtml(c)}">${escHtml(c)}<span class="sort-arrow">${arrow}</span></th>`;
+  }).join('');
+  const bodyHtml = shown.map((r,i)=>{
+    const cells = columns.map(c => `<td>${escHtml(formatAttrValue(c, r.props[c]) ?? '')}</td>`).join('');
+    return `<tr class="at-clickable" data-i="${i}">${cells}</tr>`;
+  }).join('');
+  const capNote = filtered.length > ATTR_TABLE_ROW_CAP
+    ? `<div style="padding:6px 9px;font-size:11px;color:var(--ink-soft);">Showing first ${ATTR_TABLE_ROW_CAP} of ${filtered.length} matching rows — use the filter to narrow it down.</div>` : '';
+
+  document.getElementById('attrTableWrap').innerHTML = `<table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>${capNote}`;
+
+  document.querySelectorAll('#attrTableWrap th[data-col]').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const col = th.dataset.col;
+      if(attrTableState.sortCol === col) attrTableState.sortDir *= -1;
+      else { attrTableState.sortCol = col; attrTableState.sortDir = 1; }
+      renderAttrTable();
+    });
+  });
+  document.querySelectorAll('#attrTableWrap tr[data-i]').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const row = shown[+tr.dataset.i];
+      if(!row.geometry) return;
+      try{
+        const bounds = L.geoJSON(row.geometry).getBounds();
+        if(bounds.isValid()){
+          document.getElementById('attrTableModal').classList.remove('show');
+          map.flyToBounds(bounds, { maxZoom:17, padding:[40,40] });
+        }
+      }catch(e){ /* geometry too exotic to bound - not critical, just skip the fly-to */ }
+    });
+  });
+}
+
+document.getElementById('attrTableFilter').addEventListener('input', renderAttrTable);
+document.getElementById('closeAttrTable').addEventListener('click', ()=> document.getElementById('attrTableModal').classList.remove('show'));
+document.getElementById('attrTableModal').addEventListener('click', e=>{
+  if(e.target.id === 'attrTableModal') document.getElementById('attrTableModal').classList.remove('show');
+});
+
 async function runAll(){
   if(!boundaryGeom) return;
   // Conditional layers (e.g. Soil Landscapes) are tested every run regardless of
@@ -2423,6 +2558,7 @@ async function runAll(){
       card.innerHTML = `<div class="rc-head">
           <label class="rc-toggle" title="Show/hide on map"><input type="checkbox" checked data-toggle></label>
           <span class="swatch" style="background:${lyr.color}"></span>${lyr.name}
+          <button class="textbtn" data-view-table style="margin-top:0;">View table</button>
           <span class="badge hit" style="margin-left:auto;">${n} feature${n>1?'s':''}${categoryCount>1?` · ${categoryCount} classes`:''}</span>
         </div>
         ${gj.truncated?'<div class="rc-body" style="color:var(--red);">Hit the 20,000-feature safety cap — results are incomplete.</div>':''}
@@ -2433,6 +2569,7 @@ async function runAll(){
         if(e.target.checked){ lyr.mapLayerGroup.addTo(map); lyr.visible = true; }
         else { map.removeLayer(lyr.mapLayerGroup); lyr.visible = false; }
       });
+      card.querySelector('[data-view-table]').addEventListener('click', ()=> openAttributeTable(lyr));
 
       const uniqueVals = [...new Set(attrSummary)].slice(0,6).join('; ');
       return `${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?` [UNPAGINATED FALLBACK — may be capped — reason: ${gj.unpaginatedFallbackReason || 'unknown'}]`:''} — ${uniqueVals || 'see attributes'}`;
@@ -4342,7 +4479,9 @@ async function fetchKoalaSightings(){
     const n = gj.features.length;
     statusEl.innerHTML = `<span class="ok">Found ${n} koala sighting${n===1?'':'s'} within the ${ASSESSMENT_BUFFER_KM}km buffer.</span>` +
       (gj.truncated ? '<br><span class="err">Hit the 20,000-feature safety cap — results are incomplete.</span>' : '') +
-      (gj.unpaginatedFallback ? `<br><span class="err">Pagination failed — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</span>` : '');
+      (gj.unpaginatedFallback ? `<br><span class="err">Pagination failed — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</span>` : '') +
+      (n > 0 ? '<br><button class="textbtn" id="viewKoalaTable" style="margin-top:4px;">View table</button>' : '');
+    if(n > 0) document.getElementById('viewKoalaTable').addEventListener('click', ()=> openAttributeTable(lyr));
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>`;
   }finally{
