@@ -150,6 +150,14 @@
     background:var(--amber-soft); border:1px solid var(--amber);
     border-radius:3px; padding:6px 8px; margin:-2px 0 6px;
   }
+  .map-legend{
+    background:var(--panel); border:1px solid var(--line); border-radius:2px;
+    padding:8px 10px; font-size:11px; max-width:220px; max-height:240px; overflow-y:auto;
+    box-shadow:0 1px 4px rgba(0,0,0,.15); display:none;
+  }
+  .legend-title{ font-weight:700; text-transform:uppercase; letter-spacing:.03em; font-size:10px; color:var(--ink-soft); margin-bottom:6px; }
+  .legend-row{ display:flex; align-items:center; gap:6px; padding:2px 0; line-height:1.3; }
+  .legend-swatch{ width:10px; height:10px; border-radius:2px; flex:none; }
   #resumeBanner{
     display:flex; align-items:center; justify-content:space-between; gap:8px;
     background:var(--amber-soft); border-bottom:1px solid var(--amber);
@@ -972,6 +980,34 @@ L.control.layers(
 
 L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
 
+// Live legend — shows what's currently on the map without needing to
+// glance back at the sidebar while panning/zoomed in. A real Leaflet
+// control (not a plain floating div) so it respects the map's own
+// positioning/stacking rather than fighting the zoom/scale/basemap
+// controls already in the other three corners.
+const legendControl = L.control({ position:'bottomleft' });
+legendControl.onAdd = function(){
+  const div = L.DomUtil.create('div', 'map-legend');
+  div.id = 'mapLegend';
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.disableScrollPropagation(div);
+  return div;
+};
+legendControl.addTo(map);
+
+function updateMapLegend(){
+  const el = document.getElementById('mapLegend');
+  if(!el) return;
+  const activeLayers = layers.filter(l => l.on && l.lastGeoJSON && l.lastGeoJSON.features.length && l.visible !== false);
+  if(KOALA_LAYER.lastGeoJSON && KOALA_LAYER.lastGeoJSON.features.length) activeLayers.push(KOALA_LAYER);
+  if(!boundaryGeom && !activeLayers.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  const rows = [];
+  if(boundaryGeom) rows.push(`<div class="legend-row"><span class="legend-swatch" style="background:#fff;border:1.5px solid #E81717;"></span>Subject Site</div>`);
+  activeLayers.forEach(l => rows.push(`<div class="legend-row"><span class="legend-swatch" style="background:${l.color}"></span>${escHtml(l.name)}</div>`));
+  el.innerHTML = `<div class="legend-title">Legend</div>${rows.join('')}`;
+  el.style.display = 'block';
+}
+
 // Dedicated pane so the subject site outline always renders above queried
 // layer results, regardless of the order they're added to the map in.
 // pointerEvents:none is essential here — a canvas element intercepts clicks
@@ -1089,6 +1125,7 @@ function renderLayerList(){
     cb.addEventListener('change', e=>{
       layers[+e.target.dataset.idx].on = e.target.checked;
       if(typeof saveSessionDebounced === 'function') saveSessionDebounced();
+      if(typeof updateMapLegend === 'function') updateMapLegend();
     });
   });
   el.querySelectorAll('button.del').forEach(btn=>{
@@ -1611,6 +1648,7 @@ function loadGeometry(geom, filename){
   fileStatus.innerHTML = `<span class="ok">Loaded ${filename} — approx. ${ha.toFixed(2)} ha, ${ASSESSMENT_BUFFER_KM}km + ${CONTEXT_BUFFER_KM*1000}m buffers created</span>`;
   document.getElementById('runQuery').disabled = false;
   saveSession();
+  updateMapLegend();
 }
 
 // Rebuilds just the cadastre-radius buffer (contextGeom/contextLayer) from
@@ -2568,6 +2606,7 @@ async function runAll(){
       card.querySelector('[data-toggle]').addEventListener('change', e=>{
         if(e.target.checked){ lyr.mapLayerGroup.addTo(map); lyr.visible = true; }
         else { map.removeLayer(lyr.mapLayerGroup); lyr.visible = false; }
+        updateMapLegend();
       });
       card.querySelector('[data-view-table]').addEventListener('click', ()=> openAttributeTable(lyr));
 
@@ -2624,6 +2663,7 @@ async function runAll(){
       card.querySelector('[data-toggle]').addEventListener('change', e=>{
         if(e.target.checked){ lyr.mapLayerGroup.addTo(map); lyr.visible = true; }
         else { map.removeLayer(lyr.mapLayerGroup); lyr.visible = false; }
+        updateMapLegend();
       });
 
       reportLines.push(`${lyr.name}: ${n} dissolved corridor polygon(s) generated from ${lyr.sourceLayer} (10/20/30/40m by order, dissolved per order)`);
@@ -4482,6 +4522,7 @@ async function fetchKoalaSightings(){
       (gj.unpaginatedFallback ? `<br><span class="err">Pagination failed — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</span>` : '') +
       (n > 0 ? '<br><button class="textbtn" id="viewKoalaTable" style="margin-top:4px;">View table</button>' : '');
     if(n > 0) document.getElementById('viewKoalaTable').addEventListener('click', ()=> openAttributeTable(lyr));
+    updateMapLegend();
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>`;
   }finally{
