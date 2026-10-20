@@ -1675,6 +1675,81 @@ function formatBufferKm(km){
 }
 
 /* =========================================================
+   Cadastre parcel identify popup — clicking a Cadastre (Lot) polygon
+   shows a formatted "identify" popup (lot/plan, area, coordinates) with
+   a one-click shapefile download for just that parcel, instead of the
+   generic raw-attribute popup every other layer gets.
+
+   The exact field names the NSW_Cadastre service returns can't be
+   verified from this environment (no network access to query it live),
+   so each displayed value tries several plausible spellings and simply
+   omits that row if none match, rather than showing a wrong/blank
+   field with false confidence - the "All attributes" expander always
+   shows everything the service actually returned either way, so
+   nothing is hidden if a guess here turns out wrong.
+========================================================= */
+const CADASTRE_FIELD_CANDIDATES = {
+  lot: ['lotnumber', 'LotNumber', 'LOTNUMBER', 'lot'],
+  section: ['sectionnumber', 'SectionNumber', 'SECTIONNUMBER'],
+  plan: ['plannumber', 'PlanNumber', 'PLANNUMBER', 'planlabel', 'PlanLabel'],
+  planType: ['plantype', 'PlanType', 'PLANTYPE', 'classsubtype', 'ClassSubtype'],
+  status: ['itstitlestatus', 'ITSTitleStatus', 'titlestatus', 'TitleStatus'],
+  locality: ['locality', 'Locality', 'LOCALITY', 'suburbname', 'SuburbName'],
+  state: ['state', 'State', 'STATE'],
+};
+function pickCadastreField(props, keys){
+  for(const k of keys){ if(props[k] !== undefined && props[k] !== null && props[k] !== '') return props[k]; }
+  return null;
+}
+function formatDMS(deg){
+  const abs = Math.abs(deg);
+  const d = Math.floor(abs);
+  const mFull = (abs - d) * 60;
+  const m = Math.floor(mFull);
+  const s = Math.round((mFull - m) * 60);
+  return `${d}° ${m}' ${s}"`;
+}
+function buildCadastrePopup(feature, latlng){
+  const props = feature.properties || {};
+  const lot = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.lot);
+  const section = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.section);
+  const plan = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.plan);
+  const planType = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.planType);
+  const status = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.status);
+  const locality = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.locality);
+  const state = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.state);
+
+  let areaM2 = null;
+  try{ areaM2 = turf.area(feature); }catch(e){ /* exotic geometry - just skip the computed area row */ }
+
+  const lotLabel = [lot, section ? ('Sec ' + section) : null, plan].filter(Boolean).join('/') || null;
+
+  const rows = [];
+  if(status) rows.push(['Parcel Status', status]);
+  if(planType) rows.push(['Parcel Type', planType]);
+  if(plan != null) rows.push(['Plan Number', String(plan)]);
+  if(lot != null) rows.push(['Lot Number', String(lot)]);
+  if(locality) rows.push(['Locality', locality]);
+  if(state) rows.push(['State', state]);
+
+  const rawRows = Object.entries(props)
+    .filter(([k])=>!/^(shape|objectid)/i.test(k))
+    .map(([k,v])=>`<div><b>${escHtml(k)}</b>: ${escHtml(v)}</div>`).join('');
+
+  return `
+    <div style="min-width:220px;max-width:260px;">
+      <div style="font-weight:700;margin-bottom:4px;">${lotLabel ? 'Lot ' + escHtml(lotLabel) : 'Parcel'}</div>
+      <div style="color:var(--ink-soft);font-size:11px;margin-bottom:8px;">
+        ${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}<br>${formatDMS(latlng.lat)}, ${formatDMS(latlng.lng)}
+      </div>
+      ${areaM2 != null ? `<div style="font-size:12px;margin-bottom:6px;"><b>Area:</b> ${areaM2.toFixed(2)} m²</div>` : ''}
+      ${rows.length ? `<div style="font-size:12px;line-height:1.6;margin-bottom:8px;">${rows.map(([k,v])=>`<div><b>${escHtml(k)}:</b> ${escHtml(v)}</div>`).join('')}</div>` : ''}
+      <details style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:11px;color:var(--slate);">All attributes</summary><div style="font-size:11px;margin-top:4px;line-height:1.5;">${rawRows}</div></details>
+      <button type="button" class="textbtn" style="margin:0;" data-download-parcel>&#8681; Download this parcel (shapefile)</button>
+    </div>`;
+}
+
+/* =========================================================
    Session autosave/restore — the boundary + buffer settings + which
    layers are checked, written to localStorage so an accidental tab
    close/refresh mid-assessment doesn't lose everything. Deliberately
@@ -2615,6 +2690,28 @@ async function runAll(){
           fillOpacity: 0.75
         }),
         onEachFeature:(f, l)=>{
+          if(lyr.name === 'Cadastre (Lot)'){
+            // Dynamic per-click popup (not a static bindPopup) so the shown
+            // coordinates are always wherever was actually clicked within
+            // the parcel, matching how NSW's own spatial-portal "identify"
+            // results behave, rather than a fixed centroid.
+            l.on('click', e=>{
+              const popup = L.popup({ maxWidth: 280 })
+                .setLatLng(e.latlng)
+                .setContent(buildCadastrePopup(f, e.latlng))
+                .openOn(map);
+              const el = popup.getElement();
+              const btn = el && el.querySelector('[data-download-parcel]');
+              if(btn) btn.addEventListener('click', ()=>{
+                const fc = { type:'FeatureCollection', features:[f] };
+                const lotLabel = pickCadastreField(f.properties || {}, CADASTRE_FIELD_CANDIDATES.lot) || 'parcel';
+                const planLabel = pickCadastreField(f.properties || {}, CADASTRE_FIELD_CANDIDATES.plan) || '';
+                const filename = 'cadastre-' + [lotLabel, planLabel].filter(Boolean).join('-').replace(/[^a-z0-9-]+/gi,'_').toLowerCase();
+                exportShapefile(fc, filename, { color: lyr.color, outlineOnly:true }, btn);
+              });
+            });
+            return;
+          }
           const rows = Object.entries(f.properties||{})
             .filter(([k])=>!/^(shape|objectid)/i.test(k))
             .slice(0,8)
