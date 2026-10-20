@@ -258,6 +258,7 @@
     margin-top:8px;
   }
   button.secondary:hover{ border-color:var(--ink-soft); }
+  button.secondary.active-measure{ background:var(--moss); color:#fff; border-color:var(--moss); }
 
   /* summary */
   #summary{ font-size:12.5px; line-height:1.6; }
@@ -712,6 +713,7 @@
 
     <section>
       <button class="primary" id="runQuery" disabled>Fetch site data</button>
+      <button class="secondary" id="newSiteBtn" style="margin-top:6px;">New site…</button>
     </section>
 
     <section id="summarySection" style="display:none;">
@@ -765,6 +767,15 @@
       <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against the Koala Species Sightings layer within the assessment buffer, fetched independently of the main "Fetch site data" run.</p>
       <button class="secondary" id="fetchKoalaSightings">Fetch koala sightings</button>
       <div id="koalaFetchStatus" style="font-size:12px;margin-top:6px;"></div>
+    </section>
+
+    <section>
+      <h2>Measure</h2>
+      <button class="secondary" id="measureToggleBtn">Measure distance/area</button>
+      <div id="measurePanel" style="display:none;margin-top:8px;">
+        <div id="measureStatus" style="font-size:12px;color:var(--ink-soft);">Click the map to start measuring.</div>
+        <button class="textbtn" id="measureClearBtn" style="margin-top:6px;">Clear points</button>
+      </div>
     </section>
 
     <section id="figureSection" style="display:none;">
@@ -2159,6 +2170,99 @@ function summarizeFeatures(features){
    Run all checked layers, render results + report
 ========================================================= */
 document.getElementById('runQuery').addEventListener('click', runAll);
+
+// A full reload is the only way to guarantee every piece of per-site state
+// (map layers, fetched results, chat context, QGIS script lock, etc. - all
+// scattered across many independent variables) is genuinely clean, rather
+// than risking a half-reset leaving some stale layer or result visible.
+// Clears the saved session first so the next visit doesn't offer to
+// "resume" the site that was just deliberately finished with.
+document.getElementById('newSiteBtn').addEventListener('click', ()=>{
+  if(boundaryGeom && !confirm('Start a new site? This discards the current boundary and all fetched results (anything you\'ve exported is safe).')) return;
+  clearSavedSession();
+  location.reload();
+});
+
+/* =========================================================
+   Measure tool — click to drop points, see running distance; a third
+   point also closes the shape as a polygon and adds its area. Uses
+   turf (already loaded for buffering) rather than pulling in a
+   dedicated measurement plugin - length/area on a small number of
+   clicked points is simple enough not to need one.
+========================================================= */
+let measureActive = false;
+let measurePoints = []; // [lng, lat]
+let measureLine = null;
+let measureMarkers = [];
+
+function formatMeasureLength(m){
+  return m >= 1000 ? (m/1000).toFixed(2) + ' km' : m.toFixed(1) + ' m';
+}
+function formatMeasureArea(m2){
+  return m2 >= 10000 ? (m2/10000).toFixed(2) + ' ha' : m2.toFixed(1) + ' m²';
+}
+
+function updateMeasureStatus(){
+  const statusEl = document.getElementById('measureStatus');
+  if(measurePoints.length === 0){ statusEl.textContent = 'Click the map to start measuring.'; return; }
+  if(measurePoints.length === 1){ statusEl.textContent = 'Click to add more points…'; return; }
+  const line = turf.lineString(measurePoints);
+  const lengthM = turf.length(line, { units:'kilometers' }) * 1000;
+  let text = `Length: ${formatMeasureLength(lengthM)}`;
+  if(measurePoints.length >= 3){
+    const closed = [...measurePoints, measurePoints[0]];
+    const areaM2 = turf.area(turf.polygon([closed]));
+    text += ` · Area: ${formatMeasureArea(areaM2)}`;
+  }
+  statusEl.textContent = text;
+}
+
+function redrawMeasureLine(){
+  if(measureLine){ map.removeLayer(measureLine); measureLine = null; }
+  if(measurePoints.length >= 2){
+    const latlngs = measurePoints.map(p=>[p[1], p[0]]);
+    measureLine = L.polyline(latlngs, { color:'#E81717', weight:2, dashArray:'5,5' }).addTo(map);
+  }
+  updateMeasureStatus();
+}
+
+function measureClickHandler(e){
+  measurePoints.push([e.latlng.lng, e.latlng.lat]);
+  measureMarkers.push(L.circleMarker(e.latlng, { radius:4, color:'#E81717', weight:2, fillColor:'#fff', fillOpacity:1 }).addTo(map));
+  redrawMeasureLine();
+}
+
+function clearMeasurement(){
+  measurePoints = [];
+  measureMarkers.forEach(m => map.removeLayer(m));
+  measureMarkers = [];
+  if(measureLine){ map.removeLayer(measureLine); measureLine = null; }
+  updateMeasureStatus();
+}
+
+function setMeasureActive(active){
+  measureActive = active;
+  const btn = document.getElementById('measureToggleBtn');
+  const panel = document.getElementById('measurePanel');
+  if(active){
+    clearMeasurement();
+    map.on('click', measureClickHandler);
+    map.getContainer().style.cursor = 'crosshair';
+    btn.textContent = 'Stop measuring';
+    btn.classList.add('active-measure');
+    panel.style.display = 'block';
+  }else{
+    map.off('click', measureClickHandler);
+    map.getContainer().style.cursor = '';
+    btn.textContent = 'Measure distance/area';
+    btn.classList.remove('active-measure');
+    panel.style.display = 'none';
+    clearMeasurement();
+  }
+}
+
+document.getElementById('measureToggleBtn').addEventListener('click', ()=> setMeasureActive(!measureActive));
+document.getElementById('measureClearBtn').addEventListener('click', clearMeasurement);
 
 async function runAll(){
   if(!boundaryGeom) return;
