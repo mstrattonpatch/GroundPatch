@@ -7,6 +7,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:ital,wght@1,600;1,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Leaflet.markercluster: sightings layers render one real L.marker (DOM
+     element) per record, which genuinely lags the map once a site turns up
+     hundreds of them across many species - clustering collapses nearby
+     markers into a single node until zoomed in, keeping pan/zoom responsive
+     regardless of record count. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <!-- xlsx-js-style: drop-in-compatible fork of SheetJS (same XLSX global, same
@@ -3730,7 +3738,17 @@ function renderSightingsOnMap(records){
     marker.bindPopup(`<div style="min-width:170px;"><div style="font-weight:600;">${name}</div>${common?`<div>${common}</div>`:''}<div><b>Class</b>: ${className}</div>${date?`<div><b>Record date</b>: ${date}</div>`:''}${distance?`<div><b>Distance</b>: ${distance}</div>`:''}</div>`);
     return marker;
   }).filter(Boolean);
-  sightingsMapLayerGroup = L.layerGroup(markers).addTo(map);
+  // Clustering keeps pan/zoom responsive once a site turns up hundreds of
+  // sightings across many species - each marker is still a real DOM node
+  // underneath, which lags badly uncollapsed. Falls back to a plain layer
+  // group if the clustering plugin didn't load (e.g. blocked network), so
+  // a slower map still beats a broken one.
+  sightingsMapLayerGroup = typeof L.markerClusterGroup === 'function'
+    ? L.markerClusterGroup({ maxClusterRadius: 50, spiderfyOnMaxZoom: true, disableClusteringAtZoom: 17 })
+    : L.layerGroup();
+  if(sightingsMapLayerGroup.addLayers) sightingsMapLayerGroup.addLayers(markers);
+  else markers.forEach(m => sightingsMapLayerGroup.addLayer(m));
+  sightingsMapLayerGroup.addTo(map);
 }
 
 function pointWithinPolygon(feature, polygon){
