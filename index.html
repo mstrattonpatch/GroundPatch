@@ -884,10 +884,35 @@ document.getElementById('viewQgisScript').addEventListener('click', showQgisScri
 // everything onto one bitmap instead — same visuals, dramatically
 // cheaper to redraw on every zoom/pan frame.
 const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([-33.05, 149.8], 6);
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 19,
-  attribution: 'Esri, Maxar, Earthstar Geographics'
-}).addTo(map);
+
+// Basemap switcher — imagery alone has no roads/place names to orient by,
+// which is exactly the problem that makes site context hard to read at a
+// glance. Topo and OSM street views are offered as full alternatives;
+// "Place labels" is a transparent reference overlay (names/boundaries
+// only) that sits on top of whichever basemap is active, on by default so
+// imagery gets labels without losing the imagery itself.
+const basemapImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Esri, Maxar, Earthstar Geographics'
+});
+const basemapTopo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Esri, HERE, Garmin, FAO, NOAA, USGS'
+});
+const basemapStreets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+});
+basemapImagery.addTo(map);
+
+const referenceLabelsLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Esri'
+});
+referenceLabelsLayer.addTo(map);
+
+L.control.layers(
+  { 'Satellite imagery': basemapImagery, 'Topographic': basemapTopo, 'Streets (OSM)': basemapStreets },
+  { 'Place labels': referenceLabelsLayer },
+  { position: 'topright', collapsed: true }
+).addTo(map);
+
 L.control.scale({ metric:true, imperial:false, position:'bottomright' }).addTo(map);
 
 // Dedicated pane so the subject site outline always renders above queried
