@@ -1569,11 +1569,60 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
 let selectLotActive = false;
 let selectLotPreviewLayer = null;
 let selectLotLabelMarker = null;
+let cadastreExtentLayer = null;
+
+// NSW's own spatial viewer stops drawing lot boundaries once the view is
+// zoomed out past roughly 1:30,000 (resolution > ~30m/px) - a suburb's
+// worth of parcels isn't legible at that scale and querying all of them
+// on every pan would be slow for no benefit. Zoom 13 is where resolution
+// crosses below 30m/px at Sydney's latitude, so that's the cutoff below
+// which nothing is drawn.
+const CADASTRE_EXTENT_MIN_ZOOM = 13;
 
 function clearSelectLotPreview(){
   if(selectLotPreviewLayer){ map.removeLayer(selectLotPreviewLayer); selectLotPreviewLayer = null; }
   if(selectLotLabelMarker){ map.removeLayer(selectLotLabelMarker); selectLotLabelMarker = null; }
 }
+
+function clearCadastreExtentLayer(){
+  if(cadastreExtentLayer){ map.removeLayer(cadastreExtentLayer); cadastreExtentLayer = null; }
+}
+
+// Draws every lot boundary visible in the current map view the moment the
+// "select a lot" toggle goes on - no click needed first - and re-runs
+// (debounced) on every pan/zoom while it stays on. This is a lightweight
+// visual reference layer only (not the main paginated layer-query path
+// used for exported data), so it deliberately doesn't paginate past
+// resultRecordCount - it's always scoped to a zoomed-in viewport already.
+async function fetchCadastreExtentLots(){
+  if(!selectLotActive) return;
+  const statusEl = document.getElementById('selectLotStatus');
+  if(map.getZoom() < CADASTRE_EXTENT_MIN_ZOOM){
+    clearCadastreExtentLayer();
+    statusEl.textContent = 'Zoom in further to see lot boundaries.';
+    return;
+  }
+  if(statusEl.textContent === 'Zoom in further to see lot boundaries.') statusEl.textContent = '';
+  const b = map.getBounds();
+  const params = new URLSearchParams({
+    f:'geojson', geometry:`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`,
+    geometryType:'esriGeometryEnvelope', inSR:'4326', spatialRel:'esriSpatialRelIntersects',
+    outFields:'planlabel', returnGeometry:'true', outSR:'4326', resultRecordCount:'2000'
+  });
+  try{
+    const gj = await arcgisFetchJSON(withProxy(`${CADASTRE_LOT_URL}/9/query?${params.toString()}`));
+    if(!selectLotActive) return; // toggled off while the request was in flight
+    clearCadastreExtentLayer();
+    cadastreExtentLayer = L.geoJSON(gj, {
+      interactive:false,
+      style:{ color:'#FFAA00', weight:1.5, fillOpacity:0 }
+    }).addTo(map);
+  }catch(err){
+    if(!selectLotActive) return;
+    console.warn('[select lot] extent cadastre fetch failed:', err);
+  }
+}
+const fetchCadastreExtentLotsDebounced = debounce(fetchCadastreExtentLots, 400);
 
 async function selectLotClickHandler(e){
   const statusEl = document.getElementById('selectLotStatus');
@@ -1642,16 +1691,20 @@ function setSelectLotActive(active){
   const statusEl = document.getElementById('selectLotStatus');
   if(active){
     map.on('click', selectLotClickHandler);
+    map.on('moveend zoomend', fetchCadastreExtentLotsDebounced);
     map.getContainer().style.cursor = 'crosshair';
     btn.textContent = 'Click a lot on the map… (click again to cancel)';
     btn.classList.add('active-measure');
+    fetchCadastreExtentLots();
   }else{
     map.off('click', selectLotClickHandler);
+    map.off('moveend zoomend', fetchCadastreExtentLotsDebounced);
     map.getContainer().style.cursor = '';
     btn.textContent = 'Or select a lot by clicking the map';
     btn.classList.remove('active-measure');
     statusEl.textContent = '';
     clearSelectLotPreview();
+    clearCadastreExtentLayer();
   }
 }
 document.getElementById('selectLotToggleBtn').addEventListener('click', ()=> setSelectLotActive(!selectLotActive));
