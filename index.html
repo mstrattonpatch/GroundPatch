@@ -737,6 +737,8 @@
       <div id="lotSearchHint" class="lot-search-hint" style="display:none;">A plan number on its own (e.g. DP709613) forces a slow, unindexed search across every lot in NSW and can take up to a minute, or time out — add the lot number too (e.g. <strong>1/DP709613</strong>) for a near-instant, indexed search instead.</div>
       <button class="secondary" id="runAddressSearch">Search</button>
       <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
+      <button class="secondary" id="selectLotToggleBtn" style="margin-top:8px;">Or select a lot by clicking the map</button>
+      <div id="selectLotStatus" style="font-size:12px;margin-top:6px;"></div>
     </section>
 
     <section>
@@ -1548,6 +1550,87 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
 });
 
 /* =========================================================
+   Select site by clicking a lot — lets you define the subject site
+   straight off the live cadastre, before downloading/uploading any
+   boundary file at all. Reuses fetchLotContainingPoint() (the same
+   point-in-lot lookup the address search already does once it's
+   geocoded a point) rather than needing its own query logic, and
+   buildCadastrePopup() for a consistent identify-style result with an
+   explicit "Use as site boundary" confirmation step - clicking never
+   silently commits to a lot, in case the click missed by a few metres
+   onto the neighbour.
+========================================================= */
+let selectLotActive = false;
+let selectLotPreviewLayer = null;
+
+function clearSelectLotPreview(){
+  if(selectLotPreviewLayer){ map.removeLayer(selectLotPreviewLayer); selectLotPreviewLayer = null; }
+}
+
+async function selectLotClickHandler(e){
+  const statusEl = document.getElementById('selectLotStatus');
+  clearSelectLotPreview();
+  statusEl.innerHTML = 'Finding the lot under that point…';
+  try{
+    const result = await fetchLotContainingPoint({ type:'Point', coordinates:[e.latlng.lng, e.latlng.lat] });
+    // fetchLotContainingPoint() only hands back `geometry` and `planlabel`
+    // (it queries outFields:'*' but only pulls planlabel out of the
+    // response) - buildCadastrePopup()'s other fields still try their
+    // usual candidates against this smaller properties bag and just omit
+    // whatever a bare planlabel can't supply (status/type/locality etc.).
+    const feature = { type:'Feature', properties: { planlabel: result.planlabel }, geometry: result.geometry };
+
+    selectLotPreviewLayer = L.geoJSON(feature.geometry, {
+      style:{ color:'#52684A', weight:2.5, fillColor:'#52684A', fillOpacity:0.15 }
+    }).addTo(map);
+
+    const popup = L.popup({ maxWidth:280 })
+      .setLatLng(e.latlng)
+      .setContent(buildCadastrePopup(feature, e.latlng, { offerUseAsSite:true }))
+      .openOn(map);
+    statusEl.textContent = '';
+
+    const el = popup.getElement();
+    const useBtn = el && el.querySelector('[data-use-as-site]');
+    if(useBtn) useBtn.addEventListener('click', ()=>{
+      const label = result.planlabel || 'Selected lot';
+      loadGeometry(feature.geometry, label);
+      clearSelectLotPreview();
+      map.closePopup();
+      setSelectLotActive(false);
+    });
+    const dlBtn = el && el.querySelector('[data-download-parcel]');
+    if(dlBtn) dlBtn.addEventListener('click', ()=>{
+      const fc = { type:'FeatureCollection', features:[feature] };
+      const filename = 'cadastre-' + String(result.planlabel || 'parcel').replace(/[^a-z0-9-]+/gi,'_').toLowerCase();
+      exportShapefile(fc, filename, { color:'#52684A', outlineOnly:true }, dlBtn);
+    });
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+function setSelectLotActive(active){
+  selectLotActive = active;
+  const btn = document.getElementById('selectLotToggleBtn');
+  const statusEl = document.getElementById('selectLotStatus');
+  if(active){
+    map.on('click', selectLotClickHandler);
+    map.getContainer().style.cursor = 'crosshair';
+    btn.textContent = 'Click a lot on the map… (click again to cancel)';
+    btn.classList.add('active-measure');
+  }else{
+    map.off('click', selectLotClickHandler);
+    map.getContainer().style.cursor = '';
+    btn.textContent = 'Or select a lot by clicking the map';
+    btn.classList.remove('active-measure');
+    statusEl.textContent = '';
+    clearSelectLotPreview();
+  }
+}
+document.getElementById('selectLotToggleBtn').addEventListener('click', ()=> setSelectLotActive(!selectLotActive));
+
+/* =========================================================
    Address suggestions dropdown — fetches candidates as you type,
    and clicking one resolves straight to its lot (no re-geocoding
    needed, since the exact point was already returned).
@@ -1709,7 +1792,8 @@ function formatDMS(deg){
   const s = Math.round((mFull - m) * 60);
   return `${d}° ${m}' ${s}"`;
 }
-function buildCadastrePopup(feature, latlng){
+function buildCadastrePopup(feature, latlng, opts){
+  opts = opts || {};
   const props = feature.properties || {};
   const lot = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.lot);
   const section = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.section);
@@ -1745,6 +1829,7 @@ function buildCadastrePopup(feature, latlng){
       ${areaM2 != null ? `<div style="font-size:12px;margin-bottom:6px;"><b>Area:</b> ${areaM2.toFixed(2)} m²</div>` : ''}
       ${rows.length ? `<div style="font-size:12px;line-height:1.6;margin-bottom:8px;">${rows.map(([k,v])=>`<div><b>${escHtml(k)}:</b> ${escHtml(v)}</div>`).join('')}</div>` : ''}
       <details style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:11px;color:var(--slate);">All attributes</summary><div style="font-size:11px;margin-top:4px;line-height:1.5;">${rawRows}</div></details>
+      ${opts.offerUseAsSite ? `<button type="button" class="secondary" style="width:100%;margin:0 0 6px;padding:7px 10px;font-size:12px;" data-use-as-site>Use as site boundary</button>` : ''}
       <button type="button" class="textbtn" style="margin:0;" data-download-parcel>&#8681; Download this parcel (shapefile)</button>
     </div>`;
 }
