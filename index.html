@@ -1605,9 +1605,13 @@ async function fetchCadastreExtentLots(){
   if(statusEl.textContent === 'Zoom in further to see lot boundaries.') statusEl.textContent = '';
   const b = map.getBounds();
   const params = new URLSearchParams({
+    // outFields:'*' (not a specific field name) to match fetchLotContainingPoint()
+    // - attribute/field querying on this particular NSW service is unreliable
+    // (see fetchLotContainingPoint's own note), so asking for a named field
+    // like 'planlabel' explicitly can error out even though '*' works fine.
     f:'geojson', geometry:`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`,
     geometryType:'esriGeometryEnvelope', inSR:'4326', spatialRel:'esriSpatialRelIntersects',
-    outFields:'planlabel', returnGeometry:'true', outSR:'4326', resultRecordCount:'2000'
+    outFields:'*', returnGeometry:'true', outSR:'4326', resultRecordCount:'2000'
   });
   try{
     const gj = await arcgisFetchJSON(withProxy(`${CADASTRE_LOT_URL}/9/query?${params.toString()}`));
@@ -1617,9 +1621,11 @@ async function fetchCadastreExtentLots(){
       interactive:false,
       style:{ color:'#FFAA00', weight:1.5, fillOpacity:0 }
     }).addTo(map);
+    console.log('[select lot] extent cadastre lots drawn:', (gj.features || []).length);
   }catch(err){
     if(!selectLotActive) return;
     console.warn('[select lot] extent cadastre fetch failed:', err);
+    statusEl.innerHTML = `<span class="err">Couldn't load lot boundaries: ${escHtml(err.message)}</span>`;
   }
 }
 const fetchCadastreExtentLotsDebounced = debounce(fetchCadastreExtentLots, 400);
