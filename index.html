@@ -942,27 +942,6 @@ let layers = [
     url:"https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/Planning/EPI_Primary_Planning_Layers/MapServer", id:2, on:true },
   { name:"Biodiversity Values Map", cat:"ecology", color:"#B7A3C9", noCategorize:true,
     url:"https://www.lmbc.nsw.gov.au/arcgis/rest/services/BV/BiodiversityValues/MapServer", id:0, on:true },
-  { name:"Koala Species Sightings", cat:"ecology", color:"#C9893D", field:"YEAROBSERV",
-    // Matches the department's own categorized-by-year symbology (QGIS
-    // export) - "null" catches records with no year recorded, labelled
-    // "pre 1960" in the source styling.
-    colorMap:{
-      "2026":"#55FF00", "2025":"#73FFDF", "2024":"#73FFDF", "2023":"#73DFFF", "2022":"#00C5FF",
-      "2021":"#00C5FF", "2020":"#00A9E6", "2019":"#0084A8", "2018":"#005CE6", "2017":"#759C5C",
-      "2016":"#789E5D", "2015":"#7DA160", "2014":"#83A663", "2013":"#87A865", "2012":"#8CAB68",
-      "2011":"#91B06B", "2010":"#95B36D", "2009":"#9DB872", "2008":"#A0BA73", "2007":"#A4BD75",
-      "2006":"#A9BF78", "2005":"#B0C47C", "2004":"#B3C77D", "2003":"#B9C981", "2002":"#BECF84",
-      "2001":"#C3D186", "2000":"#CBD68B", "1999":"#CFD98D", "1998":"#D4DB8F", "1997":"#D8DE92",
-      "1996":"#DFE396", "1995":"#E4E697", "1994":"#EBEB9D", "1993":"#EDEC9F", "1992":"#F0ECA1",
-      "1991":"#F2EDA2", "1990":"#F2ECA2", "1989":"#F2EBA0", "1988":"#F2EAA0", "1987":"#F2EA9D",
-      "1986":"#F2E89D", "1985":"#F2E79B", "1984":"#F2E79B", "1983":"#F2E59B", "1982":"#F2E399",
-      "1981":"#F2E399", "1980":"#F2E196", "1979":"#F2E096", "1978":"#F2DF94", "1977":"#F2DE94",
-      "1976":"#F2DC91", "1975":"#F2DC91", "1974":"#F2D98F", "1973":"#F2D88F", "1972":"#F2D88F",
-      "1971":"#F2D58D", "1970":"#F2D48D", "1969":"#F2D38A", "1968":"#F2D18A", "1967":"#F2D088",
-      "1966":"#F2CF88", "1965":"#F0CB86", "1964":"#F0C986", "1963":"#EDC585", "1962":"#EBC286",
-      "1961":"#E8BE84", "1960":"#E8BD84", "null":"#FFBEBE"
-    },
-    url:"https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/EDP/KoalaSpeciesSightings/MapServer", id:0, on:true },
   { name:"SVTM (Extant PCT)", cat:"ecology", color:"#7A9B5A", field:"PCTName",
     url:"https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/VIS/SVTM_NSW_Extant_PCT/MapServer", id:3, on:true },
   { name:"Mitchell Landscapes", cat:"ecology", color:"#8E7245", field:"ECOS_MESO",
@@ -3466,6 +3445,35 @@ function exportThreatenedSpeciesBySpecies(result){
 const BIONET_SIGHTINGS_URL = 'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/EDP/BionetSpeciesSightings/MapServer';
 const BIONET_SIGHTINGS_LAYER_ID = 0;
 
+/* =========================================================
+   Koala sightings — standalone fetch (not in the `layers` registry, so
+   it's not re-queried on every "Fetch site data" run; mirrors the
+   Species Sightings pattern above). Matches the department's own
+   categorized-by-year QGIS symbology for this layer - "null" catches
+   records with no year recorded, labelled "pre 1960" in that source
+   styling.
+========================================================= */
+const KOALA_LAYER = {
+  name: "Koala Species Sightings", cat: "ecology", color: "#C9893D", field: "YEAROBSERV",
+  url: "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/EDP/KoalaSpeciesSightings/MapServer", id: 0,
+  colorMap: {
+    "2026":"#55FF00", "2025":"#73FFDF", "2024":"#73FFDF", "2023":"#73DFFF", "2022":"#00C5FF",
+    "2021":"#00C5FF", "2020":"#00A9E6", "2019":"#0084A8", "2018":"#005CE6", "2017":"#759C5C",
+    "2016":"#789E5D", "2015":"#7DA160", "2014":"#83A663", "2013":"#87A865", "2012":"#8CAB68",
+    "2011":"#91B06B", "2010":"#95B36D", "2009":"#9DB872", "2008":"#A0BA73", "2007":"#A4BD75",
+    "2006":"#A9BF78", "2005":"#B0C47C", "2004":"#B3C77D", "2003":"#B9C981", "2002":"#BECF84",
+    "2001":"#C3D186", "2000":"#CBD68B", "1999":"#CFD98D", "1998":"#D4DB8F", "1997":"#D8DE92",
+    "1996":"#DFE396", "1995":"#E4E697", "1994":"#EBEB9D", "1993":"#EDEC9F", "1992":"#F0ECA1",
+    "1991":"#F2EDA2", "1990":"#F2ECA2", "1989":"#F2EBA0", "1988":"#F2EAA0", "1987":"#F2EA9D",
+    "1986":"#F2E89D", "1985":"#F2E79B", "1984":"#F2E79B", "1983":"#F2E59B", "1982":"#F2E399",
+    "1981":"#F2E399", "1980":"#F2E196", "1979":"#F2E096", "1978":"#F2DF94", "1977":"#F2DE94",
+    "1976":"#F2DC91", "1975":"#F2DC91", "1974":"#F2D98F", "1973":"#F2D88F", "1972":"#F2D88F",
+    "1971":"#F2D58D", "1970":"#F2D48D", "1969":"#F2D38A", "1968":"#F2D18A", "1967":"#F2D088",
+    "1966":"#F2CF88", "1965":"#F0CB86", "1964":"#F0C986", "1963":"#EDC585", "1962":"#EBC286",
+    "1961":"#E8BE84", "1960":"#E8BD84", "null":"#FFBEBE"
+  }
+};
+
 // Field names on this service haven't been confirmed against a live response
 // (the Atlas UI itself doesn't expose them) — each kind lists every plausible
 // BioNet spelling and pickSightingField() takes the first that actually has a
@@ -4027,22 +4035,14 @@ async function fetchSpeciesSightingsForSite(){
 }
 document.getElementById('fetchSpeciesSightings').addEventListener('click', fetchSpeciesSightingsForSite);
 
-// Reuses the Koala Species Sightings entry already in the `layers` registry
-// (same URL/id/colorMap it's queried with from "Fetch site data") so this
-// standalone button stays in sync with that definition rather than
-// duplicating it - it just lets you re-fetch/re-render that one layer
-// on its own, without re-querying every other checked layer too.
 function colorForKoalaYear(props){
-  const lyr = layers.find(l => l.name === 'Koala Species Sightings');
-  if(!lyr || !lyr.field || !lyr.colorMap) return (lyr && lyr.color) || '#C9893D';
-  const val = String((props || {})[lyr.field]);
-  return lyr.colorMap[val] || lyr.color;
+  const val = String((props || {})[KOALA_LAYER.field]);
+  return KOALA_LAYER.colorMap[val] || KOALA_LAYER.color;
 }
 
 async function fetchKoalaSightings(){
   if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
-  const lyr = layers.find(l => l.name === 'Koala Species Sightings');
-  if(!lyr){ console.warn('Koala Species Sightings is not in the layer registry.'); return; }
+  const lyr = KOALA_LAYER;
   const statusEl = document.getElementById('koalaFetchStatus');
   const btn = document.getElementById('fetchKoalaSightings');
   btn.disabled = true;
