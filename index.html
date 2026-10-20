@@ -142,6 +142,13 @@
     background:var(--amber-soft); border:1px solid var(--amber);
     border-radius:3px; padding:6px 8px; margin:-2px 0 6px;
   }
+  #resumeBanner{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:var(--amber-soft); border-bottom:1px solid var(--amber);
+    padding:8px 16px; font-size:11.5px; line-height:1.4;
+  }
+  #resumeBanner .resume-text{ color:#7A5200; }
+  #resumeBanner .resume-actions{ display:flex; gap:6px; flex:none; }
   #dropzone strong{ color:var(--ink); font-weight:600; }
   #fileStatus{
     margin-top:8px;
@@ -634,6 +641,8 @@
     <p>Upload a project boundary, query live NSW ecology spatial layers against it, and get a site summary. Prototype — add your own hosted layers below.</p>
   </header>
 
+  <div id="resumeBanner" style="display:none;"></div>
+
   <div id="sidebar-scroll">
 
     <section>
@@ -989,6 +998,7 @@ function renderLayerList(){
   el.querySelectorAll('input[type=checkbox]').forEach(cb=>{
     cb.addEventListener('change', e=>{
       layers[+e.target.dataset.idx].on = e.target.checked;
+      if(typeof saveSessionDebounced === 'function') saveSessionDebounced();
     });
   });
   el.querySelectorAll('button.del').forEach(btn=>{
@@ -1000,13 +1010,30 @@ function renderLayerList(){
 }
 renderLayerList();
 
+// Generic debounce - used to keep both buffer sliders responsive while
+// dragging. turf.buffer() on a complex boundary polygon, redrawing the
+// Leaflet layer, and writing to localStorage are all too expensive to run
+// on every single 'input' event a drag fires (one per pixel of movement);
+// only the cheap live label update happens instantly, the rest waits
+// until the drag settles.
+function debounce(fn, ms){
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+const saveSessionDebounced = debounce(saveSession, 400);
+const rebuildContextBufferDebounced = debounce(rebuildContextBuffer, 150);
+
 const cadastreBufferSlider = document.getElementById('cadastreBufferSlider');
 const cadastreBufferLabel = document.getElementById('cadastreBufferLabel');
 cadastreBufferSlider.addEventListener('input', ()=>{
   const meters = +cadastreBufferSlider.value;
   CONTEXT_BUFFER_KM = meters / 1000;
   cadastreBufferLabel.textContent = meters + ' m';
-  rebuildContextBuffer();
+  rebuildContextBufferDebounced();
+  saveSessionDebounced();
 });
 
 document.getElementById('showAddLayer').addEventListener('click', ()=>{
@@ -1473,8 +1500,11 @@ function updateAssessmentBuffer(fitBounds){
   if(fitBounds) map.fitBounds(assessmentLayer.getBounds(), { padding:[20,20] });
 }
 
+let lastBoundaryFilename = null;
+
 function loadGeometry(geom, filename){
   boundaryGeom = geom;
+  lastBoundaryFilename = filename;
   if(boundaryLayer) map.removeLayer(boundaryLayer);
   boundaryLayer = L.geoJSON(geom, {
     pane:'boundaryPane',
@@ -1490,6 +1520,7 @@ function loadGeometry(geom, filename){
   const ha = polygonAreaHa(geom);
   fileStatus.innerHTML = `<span class="ok">Loaded ${filename} — approx. ${ha.toFixed(2)} ha, ${ASSESSMENT_BUFFER_KM}km + ${CONTEXT_BUFFER_KM*1000}m buffers created</span>`;
   document.getElementById('runQuery').disabled = false;
+  saveSession();
 }
 
 // Rebuilds just the cadastre-radius buffer (contextGeom/contextLayer) from
@@ -1512,6 +1543,88 @@ function formatBufferKm(km){
   return km < 1 ? Math.round(km*1000) + 'm' : (Number.isInteger(km) ? km : km.toFixed(1)) + 'km';
 }
 
+/* =========================================================
+   Session autosave/restore — the boundary + buffer settings + which
+   layers are checked, written to localStorage so an accidental tab
+   close/refresh mid-assessment doesn't lose everything. Deliberately
+   does NOT persist fetched layer results (lastGeoJSON) - those can be
+   large enough to overflow localStorage's quota, and "Fetch site data"
+   regenerating them is a small cost next to losing the boundary itself.
+========================================================= */
+const SESSION_STORAGE_KEY = 'groundpatch_session_v1';
+function escHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function saveSession(){
+  if(!boundaryGeom) return;
+  try{
+    const payload = {
+      v: 1,
+      savedAt: Date.now(),
+      filename: lastBoundaryFilename || 'boundary',
+      boundaryGeom,
+      assessmentBufferKm: ASSESSMENT_BUFFER_KM,
+      contextBufferKm: CONTEXT_BUFFER_KM,
+      layerOn: Object.fromEntries(layers.filter(l=>!l.derived).map(l=>[l.name, !!l.on])),
+    };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+  }catch(e){ console.warn('Could not save session to localStorage (quota exceeded, or storage disabled).', e); }
+}
+
+function clearSavedSession(){
+  try{ localStorage.removeItem(SESSION_STORAGE_KEY); }catch(e){}
+}
+
+// Called once at startup - shows a dismissable banner rather than silently
+// restoring, since auto-replacing whatever's on screen without asking
+// would be surprising on a shared/public computer or a second site visit.
+function checkForSavedSession(){
+  let saved;
+  try{
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if(!raw) return;
+    saved = JSON.parse(raw);
+    if(!saved || !saved.boundaryGeom) return;
+  }catch(e){ return; }
+
+  const ageMin = Math.max(0, Math.round((Date.now() - (saved.savedAt || 0)) / 60000));
+  const ageText = ageMin < 1 ? 'just now' : ageMin < 60 ? `${ageMin} min ago` : `${Math.round(ageMin/60)}h ago`;
+  const banner = document.getElementById('resumeBanner');
+  banner.style.display = 'flex';
+  banner.innerHTML = `
+    <div class="resume-text">Resume previous session? <b>${escHtml(saved.filename)}</b> — saved ${ageText}.</div>
+    <div class="resume-actions">
+      <button class="secondary" id="resumeSessionBtn" style="padding:5px 10px;font-size:11.5px;">Resume</button>
+      <button class="textbtn" id="discardSessionBtn" style="padding:5px 10px;font-size:11.5px;">Discard</button>
+    </div>`;
+
+  document.getElementById('resumeSessionBtn').addEventListener('click', ()=>{
+    if(saved.assessmentBufferKm){
+      ASSESSMENT_BUFFER_KM = saved.assessmentBufferKm;
+      document.getElementById('assessmentBufferSlider').value = saved.assessmentBufferKm;
+      document.getElementById('assessmentBufferValue').textContent = formatBufferKm(saved.assessmentBufferKm);
+    }
+    if(saved.contextBufferKm){
+      CONTEXT_BUFFER_KM = saved.contextBufferKm;
+      document.getElementById('cadastreBufferSlider').value = Math.round(saved.contextBufferKm * 1000);
+      document.getElementById('cadastreBufferLabel').textContent = Math.round(saved.contextBufferKm * 1000) + ' m';
+    }
+    loadGeometry(saved.boundaryGeom, saved.filename);
+    if(saved.layerOn){
+      layers.forEach(l=>{ if(saved.layerOn[l.name] !== undefined) l.on = saved.layerOn[l.name]; });
+      renderLayerList();
+    }
+    banner.style.display = 'none';
+  });
+  document.getElementById('discardSessionBtn').addEventListener('click', ()=>{
+    clearSavedSession();
+    banner.style.display = 'none';
+  });
+}
+
+const updateAssessmentBufferDebounced = debounce(updateAssessmentBuffer, 150);
+
 function wireAssessmentBufferSlider(){
   const slider = document.getElementById('assessmentBufferSlider');
   const valueEl = document.getElementById('assessmentBufferValue');
@@ -1520,8 +1633,9 @@ function wireAssessmentBufferSlider(){
     ASSESSMENT_BUFFER_KM = Number(slider.value);
     valueEl.textContent = formatBufferKm(ASSESSMENT_BUFFER_KM);
     if(boundaryGeom){
-      updateAssessmentBuffer(true);
+      updateAssessmentBufferDebounced(true);
       hintEl.innerHTML = `<span class="ok">Buffer updated to ${formatBufferKm(ASSESSMENT_BUFFER_KM)} — click "Fetch site data" again to re-query layers against it.</span>`;
+      saveSessionDebounced();
     } else {
       hintEl.textContent = 'Sets the ecology/planning buffer size — applies when the boundary is next loaded.';
     }
@@ -2275,6 +2389,9 @@ async function runAll(){
     alert('Something went wrong while fetching site data: ' + fatalErr.message + '\n\nCheck the browser console for details.');
   }finally{
     document.getElementById('loadingOverlay').classList.remove('show');
+    // Conditional layers may have auto-enabled/disabled themselves during
+    // this run - capture that so a resumed session reflects it.
+    saveSession();
   }
 }
 
@@ -5144,6 +5261,8 @@ document.getElementById('exportReportXlsx').addEventListener('click', ()=>{
 
   XLSX.writeFile(wb, 'site-report-' + new Date().toISOString().slice(0,10) + '.xlsx');
 });
+
+checkForSavedSession();
 
 </script>
 </body>
