@@ -744,7 +744,15 @@
       <button class="secondary" id="runAddressSearch">Search</button>
       <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
       <button class="secondary" id="selectLotToggleBtn" style="margin-top:8px;">Or select a lot by clicking the map</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0 0;"><input type="checkbox" id="selectLotMultiToggle"> Select multiple lots (combine into one boundary)</label>
       <div id="selectLotStatus" style="font-size:12px;margin-top:6px;"></div>
+      <div id="selectLotMultiPanel" style="display:none;margin-top:6px;">
+        <div id="selectLotMultiList" style="font-size:12px;line-height:1.6;max-height:110px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-bottom:6px;color:var(--ink-soft);">No lots selected yet — click lots on the map to add them.</div>
+        <div style="display:flex;gap:6px;">
+          <button class="secondary" id="useMultiLotBoundaryBtn" style="flex:1;" disabled>Use selected lots as boundary</button>
+          <button class="textbtn" id="clearMultiLotBtn" style="margin:0;">Clear</button>
+        </div>
+      </div>
     </section>
 
     <section>
@@ -1570,6 +1578,12 @@ let selectLotActive = false;
 let selectLotPreviewLayer = null;
 let selectLotLabelMarker = null;
 let cadastreExtentLayer = null;
+let selectLotMultiMode = false;
+// planlabel -> { feature, layer, labelMarker } - each entry is a lot that's
+// part of the in-progress multi-lot boundary, kept on the map (not cleared
+// between clicks the way the single-lot preview is) until it's toggled off,
+// the whole selection is cleared, or it's combined into the site boundary.
+const selectedLots = new Map();
 
 // NSW's own spatial viewer stops drawing lot boundaries once the view is
 // zoomed out past roughly 1:30,000 (resolution > ~30m/px) - a suburb's
@@ -1587,6 +1601,114 @@ function clearSelectLotPreview(){
 function clearCadastreExtentLayer(){
   if(cadastreExtentLayer){ map.removeLayer(cadastreExtentLayer); cadastreExtentLayer = null; }
 }
+
+function updateMultiLotPanel(){
+  const listEl = document.getElementById('selectLotMultiList');
+  const useBtn = document.getElementById('useMultiLotBoundaryBtn');
+  if(selectedLots.size === 0){
+    listEl.textContent = 'No lots selected yet — click lots on the map to add them.';
+    useBtn.disabled = true;
+    useBtn.textContent = 'Use selected lots as boundary';
+  }else{
+    listEl.textContent = Array.from(selectedLots.keys()).join(', ');
+    useBtn.disabled = false;
+    useBtn.textContent = `Use ${selectedLots.size} selected lot${selectedLots.size > 1 ? 's' : ''} as boundary`;
+  }
+}
+
+function clearMultiLotSelection(){
+  for(const entry of selectedLots.values()){
+    map.removeLayer(entry.layer);
+    map.removeLayer(entry.labelMarker);
+  }
+  selectedLots.clear();
+  updateMultiLotPanel();
+}
+
+// Each click toggles one lot in or out of the running selection (clicking
+// an already-selected lot removes it again) rather than immediately asking
+// "use this as the boundary" the way single-lot mode does - the whole
+// point of multi-select is clicking several lots in a row without an
+// interruption after each one.
+async function toggleMultiLotSelection(e){
+  const statusEl = document.getElementById('selectLotStatus');
+  statusEl.innerHTML = 'Finding the lot under that point…';
+  try{
+    const result = await fetchLotContainingPoint({ type:'Point', coordinates:[e.latlng.lng, e.latlng.lat] });
+    statusEl.textContent = '';
+    const key = result.planlabel || `lot-${e.latlng.lat.toFixed(6)},${e.latlng.lng.toFixed(6)}`;
+    if(selectedLots.has(key)){
+      const entry = selectedLots.get(key);
+      map.removeLayer(entry.layer);
+      map.removeLayer(entry.labelMarker);
+      selectedLots.delete(key);
+    }else{
+      const feature = { type:'Feature', properties:{ planlabel: result.planlabel }, geometry: result.geometry };
+      const layer = L.geoJSON(feature.geometry, {
+        style:{ color:'#FFAA00', weight:2.5, fillColor:'#FFAA00', fillOpacity:0.18 }
+      }).addTo(map);
+      let labelLatLng = e.latlng;
+      try{
+        const onFeature = turf.pointOnFeature(feature.geometry);
+        const [lon, lat] = onFeature.geometry.coordinates;
+        labelLatLng = L.latLng(lat, lon);
+      }catch(err){ /* fall back to the click point */ }
+      const labelMarker = L.marker(labelLatLng, {
+        icon: L.divIcon({ className:'', html:'', iconSize:[0,0] }),
+        interactive:false
+      }).addTo(map);
+      labelMarker.bindTooltip(result.planlabel || 'Lot', {
+        permanent:true, direction:'center', className:'lot-label-tooltip'
+      }).openTooltip();
+      selectedLots.set(key, { feature, layer, labelMarker });
+    }
+    updateMultiLotPanel();
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${err.message}</span>`;
+  }
+}
+
+function polygonCoordsOf(geom){
+  if(geom.type === 'Polygon') return [geom.coordinates];
+  if(geom.type === 'MultiPolygon') return geom.coordinates;
+  return [];
+}
+
+document.getElementById('selectLotMultiToggle').addEventListener('change', e=>{
+  selectLotMultiMode = e.target.checked;
+  document.getElementById('selectLotMultiPanel').style.display = selectLotMultiMode ? '' : 'none';
+  clearSelectLotPreview();
+  clearMultiLotSelection();
+  document.getElementById('selectLotStatus').textContent = '';
+});
+
+document.getElementById('clearMultiLotBtn').addEventListener('click', clearMultiLotSelection);
+
+document.getElementById('useMultiLotBoundaryBtn').addEventListener('click', ()=>{
+  if(selectedLots.size === 0) return;
+  const entries = Array.from(selectedLots.values());
+  const labels = Array.from(selectedLots.keys());
+  let unionedGeom = null;
+  try{
+    let acc = entries[0].feature;
+    for(let i = 1; i < entries.length; i++) acc = turf.union(acc, entries[i].feature);
+    unionedGeom = acc.geometry;
+  }catch(err){
+    // turf.union can choke on near-duplicate shared boundary vertices
+    // between adjacent lots - fall back to a plain MultiPolygon of all the
+    // selected parcels instead of blocking on it. Not a true topological
+    // dissolve (shared edges stay as separate rings), but every selected
+    // lot is still represented and the app's buffer/area logic works fine
+    // on a MultiPolygon either way.
+    console.warn('[select lot] turf.union failed, falling back to a plain MultiPolygon:', err);
+    unionedGeom = { type:'MultiPolygon', coordinates: entries.flatMap(en => polygonCoordsOf(en.feature.geometry)) };
+  }
+  const label = entries.length === 1 ? (labels[0] || 'Selected lot') : `${entries.length} lots (${labels.join(', ')})`;
+  loadGeometry(unionedGeom, label);
+  clearMultiLotSelection();
+  map.closePopup();
+  setSelectLotActive(false);
+});
 
 // Draws every lot boundary visible in the current map view the moment the
 // "select a lot" toggle goes on - no click needed first - and re-runs
@@ -1631,6 +1753,7 @@ async function fetchCadastreExtentLots(){
 const fetchCadastreExtentLotsDebounced = debounce(fetchCadastreExtentLots, 400);
 
 async function selectLotClickHandler(e){
+  if(selectLotMultiMode) return toggleMultiLotSelection(e);
   const statusEl = document.getElementById('selectLotStatus');
   clearSelectLotPreview();
   statusEl.innerHTML = 'Finding the lot under that point…';
@@ -1711,6 +1834,7 @@ function setSelectLotActive(active){
     statusEl.textContent = '';
     clearSelectLotPreview();
     clearCadastreExtentLayer();
+    clearMultiLotSelection();
   }
 }
 document.getElementById('selectLotToggleBtn').addEventListener('click', ()=> setSelectLotActive(!selectLotActive));
