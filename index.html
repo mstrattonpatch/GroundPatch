@@ -395,6 +395,12 @@
   #mapwrap{ flex:1; position:relative; }
   #map{ width:100%; height:100%; }
   .leaflet-popup-content{ font-family:'Public Sans', sans-serif; font-size:12.5px; }
+  .lot-label-tooltip{
+    background:rgba(26,26,22,.82); color:#FFAA00; font-weight:700; font-size:12.5px;
+    padding:3px 8px; border:1px solid #FFAA00; border-radius:4px; box-shadow:none;
+    font-family:'Public Sans', sans-serif; white-space:nowrap;
+  }
+  .lot-label-tooltip::before{ display:none; }
   #loadingOverlay{
     position:absolute; inset:0; background:rgba(237,234,224,.85);
     display:none; align-items:center; justify-content:center;
@@ -1562,9 +1568,11 @@ document.getElementById('runAddressSearch').addEventListener('click', async ()=>
 ========================================================= */
 let selectLotActive = false;
 let selectLotPreviewLayer = null;
+let selectLotLabelMarker = null;
 
 function clearSelectLotPreview(){
   if(selectLotPreviewLayer){ map.removeLayer(selectLotPreviewLayer); selectLotPreviewLayer = null; }
+  if(selectLotLabelMarker){ map.removeLayer(selectLotLabelMarker); selectLotLabelMarker = null; }
 }
 
 async function selectLotClickHandler(e){
@@ -1581,8 +1589,26 @@ async function selectLotClickHandler(e){
     const feature = { type:'Feature', properties: { planlabel: result.planlabel }, geometry: result.geometry };
 
     selectLotPreviewLayer = L.geoJSON(feature.geometry, {
-      style:{ color:'#52684A', weight:2.5, fillColor:'#52684A', fillOpacity:0.15 }
+      style:{ color:'#FFAA00', weight:2.5, fillColor:'#FFAA00', fillOpacity:0.1 }
     }).addTo(map);
+
+    // Permanent label so the lot/DP number reads straight off the map,
+    // not only inside the click-triggered popup below. pointOnFeature
+    // (rather than a centroid) guarantees the label sits on the lot
+    // itself even for concave/L-shaped parcels.
+    let labelLatLng = e.latlng;
+    try{
+      const onFeature = turf.pointOnFeature(feature.geometry);
+      const [lon, lat] = onFeature.geometry.coordinates;
+      labelLatLng = L.latLng(lat, lon);
+    }catch(err){ /* fall back to the click point */ }
+    selectLotLabelMarker = L.marker(labelLatLng, {
+      icon: L.divIcon({ className:'', html:'', iconSize:[0,0] }),
+      interactive:false
+    }).addTo(map);
+    selectLotLabelMarker.bindTooltip(result.planlabel || 'Lot', {
+      permanent:true, direction:'center', className:'lot-label-tooltip'
+    }).openTooltip();
 
     const popup = L.popup({ maxWidth:280 })
       .setLatLng(e.latlng)
@@ -1603,7 +1629,7 @@ async function selectLotClickHandler(e){
     if(dlBtn) dlBtn.addEventListener('click', ()=>{
       const fc = { type:'FeatureCollection', features:[feature] };
       const filename = 'cadastre-' + String(result.planlabel || 'parcel').replace(/[^a-z0-9-]+/gi,'_').toLowerCase();
-      exportShapefile(fc, filename, { color:'#52684A', outlineOnly:true }, dlBtn);
+      exportShapefile(fc, filename, { color:'#FFAA00', outlineOnly:true }, dlBtn);
     });
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>`;
