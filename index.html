@@ -767,6 +767,9 @@
 
     <section>
       <button class="primary" id="runQuery" disabled>Fetch site data</button>
+      <button class="secondary" id="saveSessionFileBtn" style="margin-top:6px;">Save session to file…</button>
+      <button class="secondary" id="loadSessionFileBtn" style="margin-top:6px;">Load session from file…</button>
+      <input type="file" id="loadSessionFileInput" accept=".json" style="display:none">
       <button class="secondary" id="newSiteBtn" style="margin-top:6px;">New site…</button>
     </section>
 
@@ -1707,6 +1710,27 @@ function clearSavedSession(){
 // Called once at startup - shows a dismissable banner rather than silently
 // restoring, since auto-replacing whatever's on screen without asking
 // would be surprising on a shared/public computer or a second site visit.
+// Shared by the resume banner (localStorage) and "Load session from
+// file" (a saved .json) - same payload shape either way, so one function
+// applies it rather than duplicating the restore steps in two places.
+function applySessionPayload(saved){
+  if(saved.assessmentBufferKm){
+    ASSESSMENT_BUFFER_KM = saved.assessmentBufferKm;
+    document.getElementById('assessmentBufferSlider').value = saved.assessmentBufferKm;
+    document.getElementById('assessmentBufferValue').textContent = formatBufferKm(saved.assessmentBufferKm);
+  }
+  if(saved.contextBufferKm){
+    CONTEXT_BUFFER_KM = saved.contextBufferKm;
+    document.getElementById('cadastreBufferSlider').value = Math.round(saved.contextBufferKm * 1000);
+    document.getElementById('cadastreBufferLabel').textContent = Math.round(saved.contextBufferKm * 1000) + ' m';
+  }
+  loadGeometry(saved.boundaryGeom, saved.filename);
+  if(saved.layerOn){
+    layers.forEach(l=>{ if(saved.layerOn[l.name] !== undefined) l.on = saved.layerOn[l.name]; });
+    renderLayerList();
+  }
+}
+
 function checkForSavedSession(){
   let saved;
   try{
@@ -1728,21 +1752,7 @@ function checkForSavedSession(){
     </div>`;
 
   document.getElementById('resumeSessionBtn').addEventListener('click', ()=>{
-    if(saved.assessmentBufferKm){
-      ASSESSMENT_BUFFER_KM = saved.assessmentBufferKm;
-      document.getElementById('assessmentBufferSlider').value = saved.assessmentBufferKm;
-      document.getElementById('assessmentBufferValue').textContent = formatBufferKm(saved.assessmentBufferKm);
-    }
-    if(saved.contextBufferKm){
-      CONTEXT_BUFFER_KM = saved.contextBufferKm;
-      document.getElementById('cadastreBufferSlider').value = Math.round(saved.contextBufferKm * 1000);
-      document.getElementById('cadastreBufferLabel').textContent = Math.round(saved.contextBufferKm * 1000) + ' m';
-    }
-    loadGeometry(saved.boundaryGeom, saved.filename);
-    if(saved.layerOn){
-      layers.forEach(l=>{ if(saved.layerOn[l.name] !== undefined) l.on = saved.layerOn[l.name]; });
-      renderLayerList();
-    }
+    applySessionPayload(saved);
     banner.style.display = 'none';
   });
   document.getElementById('discardSessionBtn').addEventListener('click', ()=>{
@@ -2265,6 +2275,36 @@ document.getElementById('newSiteBtn').addEventListener('click', ()=>{
   if(boundaryGeom && !confirm('Start a new site? This discards the current boundary and all fetched results (anything you\'ve exported is safe).')) return;
   clearSavedSession();
   location.reload();
+});
+
+// File-based save/load - complements the localStorage autosave (which
+// only protects against an accidental refresh on this same browser) with
+// a real file you can archive or hand to a colleague to pick up the same
+// boundary/buffers/layer selection on their own machine.
+document.getElementById('saveSessionFileBtn').addEventListener('click', ()=>{
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const payload = {
+    v: 1, savedAt: Date.now(), filename: lastBoundaryFilename || 'boundary',
+    boundaryGeom, assessmentBufferKm: ASSESSMENT_BUFFER_KM, contextBufferKm: CONTEXT_BUFFER_KM,
+    layerOn: Object.fromEntries(layers.filter(l=>!l.derived).map(l=>[l.name, !!l.on])),
+  };
+  downloadBlob('groundpatch-session-' + new Date().toISOString().slice(0,10) + '.json', JSON.stringify(payload, null, 2), 'application/json');
+});
+document.getElementById('loadSessionFileBtn').addEventListener('click', ()=> document.getElementById('loadSessionFileInput').click());
+document.getElementById('loadSessionFileInput').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  e.target.value = ''; // allow re-selecting the same file next time
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    let saved;
+    try{ saved = JSON.parse(ev.target.result); }
+    catch(err){ alert('Could not read that file — not valid JSON.'); return; }
+    if(!saved || !saved.boundaryGeom){ alert('That file doesn\'t look like a GroundPatch session export.'); return; }
+    if(boundaryGeom && !confirm('Load this session? It replaces the current boundary and fetched results.')) return;
+    applySessionPayload(saved);
+  };
+  reader.readAsText(file);
 });
 
 /* =========================================================
