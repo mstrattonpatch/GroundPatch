@@ -1610,7 +1610,7 @@ function updateMultiLotPanel(){
     useBtn.disabled = true;
     useBtn.textContent = 'Use selected lots as boundary';
   }else{
-    listEl.textContent = Array.from(selectedLots.keys()).join(', ');
+    listEl.textContent = Array.from(selectedLots.values()).map(en => en.label).join(', ');
     useBtn.disabled = false;
     useBtn.textContent = `Use ${selectedLots.size} selected lot${selectedLots.size > 1 ? 's' : ''} as boundary`;
   }
@@ -1636,7 +1636,20 @@ async function toggleMultiLotSelection(e){
   try{
     const result = await fetchLotContainingPoint({ type:'Point', coordinates:[e.latlng.lng, e.latlng.lat] });
     statusEl.textContent = '';
-    const key = result.planlabel || `lot-${e.latlng.lat.toFixed(6)},${e.latlng.lng.toFixed(6)}`;
+    let labelLatLng = e.latlng;
+    try{
+      const onFeature = turf.pointOnFeature(result.geometry);
+      const [lon, lat] = onFeature.geometry.coordinates;
+      labelLatLng = L.latLng(lat, lon);
+    }catch(err){ /* fall back to the click point */ }
+    // Keyed on the lot's own geometry (via its point-on-feature, rounded to
+    // ~0.1m), not on planlabel - attribute querying on this particular NSW
+    // service is known to be unreliable (see fetchLotContainingPoint's own
+    // note) and can hand back a stale/duplicate planlabel for a genuinely
+    // different lot. Keying on an attribute that can silently collide meant
+    // a second, different lot could be mistaken for "already selected" and
+    // get toggled OFF instead of added - geometry doesn't have that problem.
+    const key = `${labelLatLng.lng.toFixed(6)},${labelLatLng.lat.toFixed(6)}`;
     if(selectedLots.has(key)){
       const entry = selectedLots.get(key);
       map.removeLayer(entry.layer);
@@ -1647,12 +1660,6 @@ async function toggleMultiLotSelection(e){
       const layer = L.geoJSON(feature.geometry, {
         style:{ color:'#FFAA00', weight:2.5, fillColor:'#FFAA00', fillOpacity:0.18 }
       }).addTo(map);
-      let labelLatLng = e.latlng;
-      try{
-        const onFeature = turf.pointOnFeature(feature.geometry);
-        const [lon, lat] = onFeature.geometry.coordinates;
-        labelLatLng = L.latLng(lat, lon);
-      }catch(err){ /* fall back to the click point */ }
       const labelMarker = L.marker(labelLatLng, {
         icon: L.divIcon({ className:'', html:'', iconSize:[0,0] }),
         interactive:false
@@ -1660,7 +1667,7 @@ async function toggleMultiLotSelection(e){
       labelMarker.bindTooltip(result.planlabel || 'Lot', {
         permanent:true, direction:'center', className:'lot-label-tooltip'
       }).openTooltip();
-      selectedLots.set(key, { feature, layer, labelMarker });
+      selectedLots.set(key, { feature, layer, labelMarker, label: result.planlabel || 'Lot' });
     }
     updateMultiLotPanel();
   }catch(err){
@@ -1687,7 +1694,7 @@ document.getElementById('clearMultiLotBtn').addEventListener('click', clearMulti
 document.getElementById('useMultiLotBoundaryBtn').addEventListener('click', ()=>{
   if(selectedLots.size === 0) return;
   const entries = Array.from(selectedLots.values());
-  const labels = Array.from(selectedLots.keys());
+  const labels = entries.map(en => en.label);
   let unionedGeom = null;
   try{
     let acc = entries[0].feature;
