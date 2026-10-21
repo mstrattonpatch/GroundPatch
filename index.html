@@ -2772,33 +2772,42 @@ async function queryLayerByIds(lyr){
   // giving up on the whole thing. A shared proxy under load (or a
   // vertex-dense layer like SVTM producing a large GeoJSON response) is
   // more likely to choke on one big request than on several smaller ones,
-  // so halving a failing slice recovers data a flat "retry the same size
-  // twice then skip" approach would have thrown away entirely.
-  const MIN_SLICE = 25;
-  async function fetchSlice(sliceIds){
+  // so splitting a failing chunk once recovers data a flat "retry the
+  // same size twice then skip" approach would have thrown away entirely.
+  // Deliberately only ONE split, each half tried ONCE more, not a full
+  // recursive halve-and-retry — every extra attempt can cost up to
+  // ARCGIS_QUERY_TIMEOUT_MS if the proxy is hanging rather than erroring,
+  // and runAll() doesn't hide its "Querying layers…" overlay until every
+  // layer's query fully settles, so unbounded retries there looked from
+  // the outside like the page had just stopped loading.
+  async function fetchChunk(chunkIds, allowSplit){
     const params = new URLSearchParams({
       f:'geojson',
-      objectIds: sliceIds.join(','),
+      objectIds: chunkIds.join(','),
       outSR:'4326',
       outFields:'*',
       returnGeometry:'true'
     });
-    for(let attempt=0; attempt<2; attempt++){
+    try{
+      const resp = await postQuery(endpoint, params);
+      const parsed = await resp.json();
+      if(parsed.error) throw new Error(parsed.error.message || 'service returned an error');
+      allFeatures.push(...(parsed.features || []));
+    }catch(firstErr){
+      await sleep(1000); // brief backoff before the one same-size retry
       try{
         const resp = await postQuery(endpoint, params);
         const parsed = await resp.json();
         if(parsed.error) throw new Error(parsed.error.message || 'service returned an error');
         allFeatures.push(...(parsed.features || []));
-        return;
-      }catch(sliceErr){
-        if(attempt === 0) await sleep(1000); // brief backoff before the one retry at this size
-        else if(sliceIds.length > MIN_SLICE){
-          const mid = Math.ceil(sliceIds.length / 2);
-          await fetchSlice(sliceIds.slice(0, mid));
-          await fetchSlice(sliceIds.slice(mid));
+      }catch(secondErr){
+        if(allowSplit && chunkIds.length > 1){
+          const mid = Math.ceil(chunkIds.length / 2);
+          await fetchChunk(chunkIds.slice(0, mid), false);
+          await fetchChunk(chunkIds.slice(mid), false);
         }else{
           partial = true;
-          console.warn(`${lyr.name}: slice of ${sliceIds.length} id(s) failed at minimum size, skipping`, sliceErr);
+          console.warn(`${lyr.name}: chunk of ${chunkIds.length} id(s) failed, skipping`, secondErr);
         }
       }
     }
@@ -2806,7 +2815,7 @@ async function queryLayerByIds(lyr){
 
   const chunkSize = 200;
   for(let i=0; i<ids.length; i+=chunkSize){
-    await fetchSlice(ids.slice(i, i+chunkSize));
+    await fetchChunk(ids.slice(i, i+chunkSize), true);
   }
   const result = { type:'FeatureCollection', features: allFeatures };
   if(truncated) result.truncated = true;
