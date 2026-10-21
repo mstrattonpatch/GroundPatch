@@ -85,6 +85,62 @@ APPROVED_TOOLS: dict[str, dict[str, str]] = {
         "algorithm_id": "(attribute filter - no geometry op)",
         "summary": "Keeps only features of `input` where `params.field`'s value is in `params.values`.",
     },
+    "union": {
+        "algorithm_id": "native:union",
+        "summary": "Every portion of `input` and `overlay`, split at their overlaps — unlike merge_with_precedence, the overlap keeps BOTH layers' attributes, not just overlay's.",
+    },
+    "reproject_layer": {
+        "algorithm_id": "native:reprojectlayer",
+        "summary": "Reprojects `input` to `params.epsg` (an EPSG code, e.g. 28356). Rarely needed — every other tool already works in EPSG:4326 and reprojects internally for metric accuracy.",
+    },
+    "fix_geometries": {
+        "algorithm_id": "native:fixgeometries",
+        "summary": "Repairs self-intersections and other invalid geometry on `input`. Every geometry-combining tool already runs this on its own output automatically — use this standalone only when a layer (e.g. a freshly uploaded dataset) needs fixing before anything else touches it.",
+    },
+    "extract_by_location": {
+        "algorithm_id": "native:extractbylocation",
+        "summary": "Keeps only features of `input` matching `params.predicate` (intersects/contains/disjoint/equals/touches/overlaps/within/crosses) against `overlay`. A spatial version of filter_by_attribute.",
+    },
+    "join_by_location": {
+        "algorithm_id": "native:joinattributesbylocation",
+        "summary": "Copies `overlay`'s attributes onto `input` features matching `params.predicate` (intersects/contains/equals/touches/overlaps/within/crosses) against it.",
+    },
+    "count_points_in_polygon": {
+        "algorithm_id": "native:countpointsinpolygon",
+        "summary": "Adds a `params.count_field` (default point_count) to every polygon of `input` with how many `overlay` points fall inside it.",
+    },
+    "join_by_nearest": {
+        "algorithm_id": "native:joinbynearest",
+        "summary": "Joins each `input` feature to its single nearest `overlay` feature (copies its attributes, adds a distance field in metres). `params.max_distance` (metres) optionally caps the search.",
+    },
+    "statistics_by_categories": {
+        "algorithm_id": "qgis:statisticsbycategories",
+        "summary": "Summary statistics (count/sum/mean/min/max) of `params.values_field` on `input`, grouped by `params.categories_field`. Returns one geometry-less row per distinct category.",
+    },
+    "multipart_to_singleparts": {
+        "algorithm_id": "native:multiparttosingleparts",
+        "summary": "Splits every multi-part feature of `input` (MultiPolygon/MultiLineString/...) into one single-part feature per part.",
+    },
+    "eliminate_slivers": {
+        "algorithm_id": "qgis:eliminateselectedpolygons",
+        "summary": "Merges every polygon of `input` smaller than `params.min_area_sqm` into its largest-area neighbour — cleans up sliver polygons left over from an overlay.",
+    },
+    "random_points_in_polygons": {
+        "algorithm_id": "native:randompointsinpolygons",
+        "summary": "Scatters `params.points_per_feature` random points inside each polygon of `input` — e.g. candidate survey/transect points.",
+    },
+    "merge_vector_layers": {
+        "algorithm_id": "native:mergevectorlayers",
+        "summary": "Combines `input` with one or more other layers named in `params.input_ids` (a list of layer ids) into one — e.g. combining several uploaded datasets before analysing them together.",
+    },
+    "create_points_from_table": {
+        "algorithm_id": "native:createpointslayerfromtable",
+        "summary": "Builds a point layer from `params.rows` (a list of {field: value} records — not an existing layer id) using `params.x_field`/`params.y_field` (default 'x'/'y') as WGS84 longitude/latitude.",
+    },
+    "regular_grid": {
+        "algorithm_id": "native:creategrid",
+        "summary": "A regular grid (point/line/rectangle/diamond/hexagon cells, `params.grid_type`, default rectangle) covering `input`'s own extent, spaced `params.spacing_m` apart.",
+    },
 }
 
 
@@ -345,6 +401,314 @@ def filter_by_attribute(input_geojson: dict, field: str, values: list) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
+def union(input_geojson: dict, overlay_geojson: dict) -> dict:
+    """Union via `native:union` — every portion of both layers, split at
+    their overlaps. Unlike merge_with_precedence (which drops input's
+    attributes wherever overlay covers it), the overlapping portion here
+    carries BOTH layers' attributes — for "where do these two layers
+    overlap, and what does each say there", not "B replaces A"."""
+    import processing
+
+    ensure_qgis_initialized()
+    input_layer = geojson_to_layer(input_geojson, "union_input")
+    overlay_layer = geojson_to_layer(overlay_geojson, "union_overlay")
+    result = processing.run("native:union", {
+        "INPUT": input_layer,
+        "OVERLAY": overlay_layer,
+        "OVERLAY_FIELDS_PREFIX": "",
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(_fix_geometries(result))
+
+
+def reproject_layer(input_geojson: dict, epsg: int) -> dict:
+    """Reprojects `input_geojson` to EPSG:`epsg` via
+    `native:reprojectlayer` (qgis_runtime.reproject(), already used
+    internally by buffer/calculate_area/etc.) — exposed as its own tool
+    for a plan that needs output in a specific CRS rather than
+    GroundPatch's EPSG:4326 default."""
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "reproject_input")
+    return layer_to_geojson(reproject(layer, epsg))
+
+
+def fix_geometries(input_geojson: dict) -> dict:
+    """Standalone exposure of the same `native:fixgeometries` repair every
+    geometry-combining tool above already runs automatically on its own
+    output (see `_fix_geometries`) — useful on its own when a layer (e.g.
+    a freshly uploaded client dataset) has known topology problems before
+    it's used in anything else."""
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "fixgeom_input")
+    return layer_to_geojson(_fix_geometries(layer))
+
+
+# native:extractbylocation's PREDICATE enum, in the exact order QGIS
+# defines it — confirmed against this QGIS build's own
+# QgsApplication.processingRegistry().
+_EXTRACT_PREDICATES = ["intersects", "contains", "disjoint", "equals", "touches", "overlaps", "within", "crosses"]
+
+
+def extract_by_location(input_geojson: dict, overlay_geojson: dict, predicate: str = "intersects") -> dict:
+    """Keeps only features of `input_geojson` matching `predicate`
+    (intersects/contains/disjoint/equals/touches/overlaps/within/crosses)
+    against `overlay_geojson`, via `native:extractbylocation` — a spatial
+    equivalent of filter_by_attribute (selection by geometry relationship
+    instead of an attribute value)."""
+    import processing
+
+    ensure_qgis_initialized()
+    input_layer = geojson_to_layer(input_geojson, "extract_input")
+    overlay_layer = geojson_to_layer(overlay_geojson, "extract_overlay")
+    pred_idx = _EXTRACT_PREDICATES.index(predicate) if predicate in _EXTRACT_PREDICATES else 0
+    result = processing.run("native:extractbylocation", {
+        "INPUT": input_layer,
+        "PREDICATE": [pred_idx],
+        "INTERSECT": overlay_layer,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+# native:joinattributesbylocation's PREDICATE enum — one shorter than
+# extractbylocation's (no "disjoint", which wouldn't make sense for a join).
+_JOIN_PREDICATES = ["intersects", "contains", "equals", "touches", "overlaps", "within", "crosses"]
+
+
+def join_by_location(input_geojson: dict, overlay_geojson: dict, predicate: str = "intersects", discard_nonmatching: bool = False) -> dict:
+    """Copies attributes from `overlay_geojson` onto `input_geojson`
+    features satisfying `predicate` against them, via
+    `native:joinattributesbylocation` (one-to-one: the first matching
+    overlay feature, if more than one matches)."""
+    import processing
+
+    ensure_qgis_initialized()
+    input_layer = geojson_to_layer(input_geojson, "join_input")
+    overlay_layer = geojson_to_layer(overlay_geojson, "join_overlay")
+    pred_idx = _JOIN_PREDICATES.index(predicate) if predicate in _JOIN_PREDICATES else 0
+    result = processing.run("native:joinattributesbylocation", {
+        "INPUT": input_layer,
+        "PREDICATE": [pred_idx],
+        "JOIN": overlay_layer,
+        "JOIN_FIELDS": [],
+        "METHOD": 1,  # one-to-one, first matching feature
+        "DISCARD_NONMATCHING": discard_nonmatching,
+        "PREFIX": "",
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def count_points_in_polygon(input_geojson: dict, overlay_geojson: dict, count_field: str = "point_count") -> dict:
+    """Adds `count_field` to every polygon in `input_geojson` with the
+    number of `overlay_geojson` point features inside it, via
+    `native:countpointsinpolygon`."""
+    import processing
+
+    ensure_qgis_initialized()
+    polygons = geojson_to_layer(input_geojson, "count_polygons")
+    points = geojson_to_layer(overlay_geojson, "count_points")
+    result = processing.run("native:countpointsinpolygon", {
+        "POLYGONS": polygons,
+        "POINTS": points,
+        "FIELD": count_field or "point_count",
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def join_by_nearest(input_geojson: dict, overlay_geojson: dict, max_distance: float | None = None) -> dict:
+    """Joins each `input_geojson` feature to its single nearest
+    `overlay_geojson` feature (all of the overlay's attributes, plus a
+    computed distance field), via `native:joinbynearest`. Reprojects into
+    the input's own UTM zone first so `max_distance` and the computed
+    distance are real ground metres, not raw EPSG:4326 degrees — same
+    reasoning as buffer()."""
+    import processing
+
+    ensure_qgis_initialized()
+    input_layer = geojson_to_layer(input_geojson, "nearest_input")
+    overlay_layer = geojson_to_layer(overlay_geojson, "nearest_overlay")
+    epsg = _layer_utm_epsg(input_layer)
+    input_proj = reproject(input_layer, epsg)
+    overlay_proj = reproject(overlay_layer, epsg)
+    params = {
+        "INPUT": input_proj,
+        "INPUT_2": overlay_proj,
+        "FIELDS_TO_COPY": [],
+        "DISCARD_NONMATCHING": False,
+        "PREFIX": "",
+        "NEIGHBORS": 1,
+        "OUTPUT": "memory:",
+    }
+    if max_distance is not None:
+        params["MAX_DISTANCE"] = max_distance
+    result = processing.run("native:joinbynearest", params)["OUTPUT"]
+    return layer_to_geojson(reproject(result, 4326))
+
+
+def statistics_by_categories(input_geojson: dict, values_field: str, categories_field: str) -> dict:
+    """Summary statistics (count, sum, mean, min, max, ...) of
+    `values_field` grouped by `categories_field`, via
+    `qgis:statisticsbycategories` (note the `qgis:` prefix, not `native:`
+    — confirmed against this QGIS build's own processing registry).
+    Returns one row per distinct category, geometry-less — same
+    convention the rest of this app uses for an attribute-only result."""
+    import processing
+
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "stats_input")
+    result = processing.run("qgis:statisticsbycategories", {
+        "INPUT": layer,
+        "VALUES_FIELD_NAME": values_field,
+        "CATEGORIES_FIELD_NAME": categories_field,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def multipart_to_singleparts(input_geojson: dict) -> dict:
+    """Splits every multi-part feature (MultiPolygon/MultiLineString/...)
+    into one single-part feature per part, via
+    `native:multiparttosingleparts` — each part keeps the original
+    feature's attributes."""
+    import processing
+
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "multipart_input")
+    result = processing.run("native:multiparttosingleparts", {
+        "INPUT": layer,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def eliminate_slivers(input_geojson: dict, min_area_sqm: float) -> dict:
+    """Merges every polygon smaller than `min_area_sqm` into its
+    largest-area neighbour, via `qgis:eliminateselectedpolygons` (note the
+    `qgis:` prefix — the `native:` version of this algorithm doesn't exist
+    in this QGIS build). Selection is driven here by area, computed in the
+    layer's own UTM zone so the threshold is real square metres — the
+    standard "clean up sliver polygons left over from an overlay" step."""
+    import processing
+
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "sliver_input")
+    epsg = _layer_utm_epsg(layer)
+    projected = reproject(layer, epsg)
+    projected.selectByExpression(f"$area < {min_area_sqm}")
+    result = processing.run("qgis:eliminateselectedpolygons", {
+        "INPUT": projected,
+        "MODE": 0,  # merge into the largest-area neighbour
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(reproject(result, 4326))
+
+
+def random_points_in_polygons(input_geojson: dict, points_per_feature: int) -> dict:
+    """Scatters `points_per_feature` random points inside each polygon of
+    `input_geojson`, via `native:randompointsinpolygons` — e.g. generating
+    candidate survey/transect points within a constraint area."""
+    import processing
+
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "randpts_input")
+    result = processing.run("native:randompointsinpolygons", {
+        "INPUT": layer,
+        "POINTS_NUMBER": points_per_feature,
+        "MIN_DISTANCE": 0,
+        "MIN_DISTANCE_GLOBAL": 0,
+        "MAX_TRIES_PER_POINT": 10,
+        "INCLUDE_POLYGON_ATTRIBUTES": True,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def merge_vector_layers(input_geojsons: list[dict]) -> dict:
+    """Combines several layers into one, via `native:mergevectorlayers` —
+    e.g. combining several uploaded client shapefiles into a single layer
+    before running further analysis on them together. Takes a LIST of
+    layers rather than the usual input/overlay pair — see jobs.py's
+    dispatch for how a plan names more than one input for this tool."""
+    import processing
+
+    ensure_qgis_initialized()
+    layers = [geojson_to_layer(gj, f"merge_input_{i}") for i, gj in enumerate(input_geojsons)]
+    result = processing.run("native:mergevectorlayers", {
+        "LAYERS": layers,
+        "CRS": None,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def create_points_from_table(rows: list[dict], x_field: str = "x", y_field: str = "y") -> dict:
+    """Builds a point layer from a list of plain `{field: value, ...}`
+    rows (e.g. a pasted table of site coordinates), via
+    `native:createpointslayerfromtable`. Every row needs at least
+    `x_field`/`y_field` as real numbers — WGS84 longitude/latitude,
+    matching the rest of this app's working CRS. Doesn't take a GeoJSON
+    `input` layer at all — the data comes straight from `rows`."""
+    import csv
+    import tempfile
+
+    import processing
+    from qgis.core import QgsVectorLayer
+
+    ensure_qgis_initialized()
+    if not rows:
+        return {"type": "FeatureCollection", "features": []}
+    fieldnames = list(rows[0].keys())
+    fd = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8", newline="")
+    try:
+        writer = csv.DictWriter(fd, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    finally:
+        fd.close()
+    table_layer = QgsVectorLayer(fd.name, "points_table", "ogr")
+    if not table_layer.isValid():
+        raise RuntimeError("Could not load the provided rows as a table.")
+    result = processing.run("native:createpointslayerfromtable", {
+        "INPUT": table_layer,
+        "XFIELD": x_field,
+        "YFIELD": y_field,
+        "ZFIELD": "",
+        "MFIELD": "",
+        "TARGET_CRS": "EPSG:4326",
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(result)
+
+
+def regular_grid(input_geojson: dict, spacing_m: float, grid_type: str = "rectangle") -> dict:
+    """A regular grid (point/line/rectangle/diamond/hexagon cells)
+    covering `input_geojson`'s own extent, spaced `spacing_m` apart, via
+    `native:creategrid` — e.g. generating systematic survey/transect
+    locations across a site."""
+    import processing
+
+    ensure_qgis_initialized()
+    layer = geojson_to_layer(input_geojson, "grid_extent_input")
+    epsg = _layer_utm_epsg(layer)
+    projected = reproject(layer, epsg)
+    extent = projected.extent()
+    extent_str = f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()} [EPSG:{epsg}]"
+    type_map = {"point": 0, "line": 1, "rectangle": 2, "diamond": 3, "hexagon": 4}
+    result = processing.run("native:creategrid", {
+        "TYPE": type_map.get(grid_type, 2),
+        "EXTENT": extent_str,
+        "HSPACING": spacing_m,
+        "VSPACING": spacing_m,
+        "HOVERLAY": 0,
+        "VOVERLAY": 0,
+        "CRS": f"EPSG:{epsg}",
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    return layer_to_geojson(reproject(result, 4326))
+
+
 # Maps APPROVED_TOOLS keys to the actual callables above, for jobs.py to
 # dispatch through rather than hardcoding a tool->function mapping of its own.
 TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
@@ -358,4 +722,18 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "reclassify": reclassify,
     "merge_with_precedence": merge_with_precedence,
     "filter_by_attribute": filter_by_attribute,
+    "union": union,
+    "reproject_layer": reproject_layer,
+    "fix_geometries": fix_geometries,
+    "extract_by_location": extract_by_location,
+    "join_by_location": join_by_location,
+    "count_points_in_polygon": count_points_in_polygon,
+    "join_by_nearest": join_by_nearest,
+    "statistics_by_categories": statistics_by_categories,
+    "multipart_to_singleparts": multipart_to_singleparts,
+    "eliminate_slivers": eliminate_slivers,
+    "random_points_in_polygons": random_points_in_polygons,
+    "merge_vector_layers": merge_vector_layers,
+    "create_points_from_table": create_points_from_table,
+    "regular_grid": regular_grid,
 }

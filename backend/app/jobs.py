@@ -43,11 +43,14 @@ def _run_operation(tool: str, op, layer_store: dict[str, dict]) -> dict:
     through run_on_qgis_thread() (not called directly) - see
     qgis_runtime._qgis_executor's docstring for why that matters."""
     fn = TOOL_FUNCTIONS[tool]
-    input_geojson = layer_store[op.input]
+    # create_points_from_table builds its layer entirely from params.rows —
+    # op.input is a required field on the model but isn't real data for
+    # this one tool, so it's never looked up in layer_store.
+    input_geojson = None if tool == "create_points_from_table" else layer_store[op.input]
 
     if tool == "buffer":
         return run_on_qgis_thread(fn, input_geojson, op.distance, op.units)
-    if tool in ("clip", "intersection", "difference"):
+    if tool in ("clip", "intersection", "difference", "union"):
         return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay])
     if tool == "dissolve":
         return run_on_qgis_thread(fn, input_geojson, op.params.get("field"))
@@ -61,6 +64,33 @@ def _run_operation(tool: str, op, layer_store: dict[str, dict]) -> dict:
         return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay])
     if tool == "filter_by_attribute":
         return run_on_qgis_thread(fn, input_geojson, op.params.get("field"), op.params.get("values", []))
+    if tool == "reproject_layer":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("epsg"))
+    if tool == "fix_geometries":
+        return run_on_qgis_thread(fn, input_geojson)
+    if tool == "extract_by_location":
+        return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay], op.params.get("predicate", "intersects"))
+    if tool == "join_by_location":
+        return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay], op.params.get("predicate", "intersects"), op.params.get("discard_nonmatching", False))
+    if tool == "count_points_in_polygon":
+        return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay], op.params.get("count_field", "point_count"))
+    if tool == "join_by_nearest":
+        return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay], op.params.get("max_distance"))
+    if tool == "statistics_by_categories":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("values_field"), op.params.get("categories_field"))
+    if tool == "multipart_to_singleparts":
+        return run_on_qgis_thread(fn, input_geojson)
+    if tool == "eliminate_slivers":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("min_area_sqm"))
+    if tool == "random_points_in_polygons":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("points_per_feature"))
+    if tool == "merge_vector_layers":
+        extra_layers = [layer_store[lid] for lid in op.params.get("input_ids", [])]
+        return run_on_qgis_thread(fn, [input_geojson, *extra_layers])
+    if tool == "create_points_from_table":
+        return run_on_qgis_thread(fn, op.params.get("rows", []), op.params.get("x_field", "x"), op.params.get("y_field", "y"))
+    if tool == "regular_grid":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("spacing_m"), op.params.get("grid_type", "rectangle"))
     raise AssertionError(f"_run_operation doesn't know how to call tool '{tool}' — add a case above (validator.py already restricts tool to APPROVED_TOOLS, so reaching here means a new tool was added to gis_worker without updating this dispatch).")
 
 
@@ -87,7 +117,9 @@ def create_job(request: JobCreateRequest) -> JobStatusResponse:
     produced_ids: list[str] = []
 
     for i, op in enumerate(request.plan.operations):
-        if op.input not in layer_store:
+        # create_points_from_table builds its layer entirely from
+        # params.rows — op.input carries no real data to look up for it.
+        if op.tool != "create_points_from_table" and op.input not in layer_store:
             job = JobStatusResponse(
                 job_id=job_id, state=JobState.error, progress=i / max(len(request.plan.operations), 1),
                 warnings=validation.warnings,
@@ -96,6 +128,17 @@ def create_job(request: JobCreateRequest) -> JobStatusResponse:
             )
             storage.save_job(job)
             return job
+        if op.tool == "merge_vector_layers":
+            missing = [lid for lid in op.params.get("input_ids", []) if lid not in layer_store]
+            if missing:
+                job = JobStatusResponse(
+                    job_id=job_id, state=JobState.error, progress=i / max(len(request.plan.operations), 1),
+                    warnings=validation.warnings,
+                    errors=[f"operation[{i}] ({op.tool}): params.input_ids entr{'y' if len(missing)==1 else 'ies'} {missing} have no data."],
+                    mock=False,
+                )
+                storage.save_job(job)
+                return job
         if op.overlay is not None and op.overlay not in layer_store:
             job = JobStatusResponse(
                 job_id=job_id, state=JobState.error, progress=i / max(len(request.plan.operations), 1),

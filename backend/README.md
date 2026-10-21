@@ -9,12 +9,17 @@ real layer data and sampled attribute values) to Claude, which can propose a
 plan using the approved tool catalogue; the validated plan then runs through
 the same real Phase 1 execution pipeline and the resulting layer(s) come back
 in the same chat turn and get added to the map with toggle/zoom/export
-controls. The catalogue has grown from the original 7 tools to 10 — it now
-also covers reclassifying a field against a value mapping, merging two
-layers with one taking precedence over the other, and filtering by
-attribute — covering realistic consulting workflows (recoding PCT codes,
-consolidating a clipped layer with a client-supplied override layer) rather
-than just the proposal's original buffer/overlay/area example. `/api/chat`
+controls. The catalogue has grown from the original 7 tools to 24 — beyond
+reclassifying a field against a value mapping, merging two layers with one
+taking precedence, and filtering by attribute (covering realistic consulting
+workflows like recoding PCT codes or consolidating a clipped layer with a
+client-supplied override), it now also covers a real topological union,
+standalone reproject/fix-geometries, spatial selection and joins (extract/
+join by location, join by nearest, count points in polygon), category
+statistics, multipart-to-singlepart, sliver elimination, random points,
+merging several layers at once, building a point layer from a pasted table
+of coordinates, and a regular survey grid — see `gis_worker.APPROVED_TOOLS`
+for the full list with each one's exact `params` shape. `/api/chat`
 needs `ANTHROPIC_API_KEY` set in this backend's environment — without it, it
 returns a clear mock reply saying so rather than failing or fabricating a
 plan. Phase 3 (QGIS project generation) and Phase 4 (production readiness)
@@ -183,7 +188,7 @@ backend/
     validator.py            — plan validation [real]
     jobs.py                  — job lifecycle: validates, then executes via gis_worker [real]
     qgis_runtime.py           — QgsApplication/Processing bootstrap, GeoJSON<->layer conversion, the single QGIS worker thread
-    gis_worker.py             — the 10 approved tools, each a real QGIS Processing call (or plain Python, for filter_by_attribute) [real]
+    gis_worker.py             — the 24 approved tools, each a real QGIS Processing call (or plain Python, for filter_by_attribute) [real]
     project_builder.py        — .qgz/.gpkg package assembly [STUB — Phase 3]
     storage.py                 — job/result storage (in-memory for now; PostGIS is a later option)
   tests/
@@ -314,18 +319,27 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-16 tests: 10 run in any environment (health check, chat without an API key
-returns a clear mock reply, validation rejection cases for every tool
-including the 3 newer ones, 404s, the mock project-ZIP download). 6 need
-`groundpatch-gis` and auto-skip without it (`QGIS_AVAILABLE` gate) — real
-end-to-end job execution, real results/layer endpoints returning computed
-geometry, a regression test specifically for the CRS/units footgun (buffer
-distance must visibly correspond to real metres, not raw degrees),
-`reclassify`/`merge_with_precedence` behaving correctly against real
-geometry, and the critical one — `/api/chat` with the Anthropic API call
-itself mocked out (via `monkeypatch.setitem(sys.modules, "anthropic", ...)`)
-but every downstream step real: plan parsing, validation, actual PyQGIS
-execution, and results coming back in the chat reply.
+23 tests: 12 run in any environment (health check, chat without an API key
+returns a clear mock reply, validation rejection cases for every tool that
+needs one — including every tool added after the original 10, and a
+`TOOLS_REQUIRING_OVERLAY` regression test for a real gap where a missing
+`overlay` used to only fail as an opaque KeyError at execution time — 404s,
+the mock project-ZIP download). 11 need `groundpatch-gis` and auto-skip
+without it (`QGIS_AVAILABLE` gate) — real end-to-end job execution, real
+results/layer endpoints returning computed geometry, a regression test
+specifically for the CRS/units footgun (buffer distance must visibly
+correspond to real metres, not raw degrees), a regression test for an
+invalid-geometry failure reproduced against this repo's own QGIS install
+(`calculate_area` choking on a self-intersecting polygon a `difference`
+upstream had produced), `reclassify`/`merge_with_precedence` behaving
+correctly against real geometry, the two special-case new tools
+(`merge_vector_layers`'s multi-layer input, `create_points_from_table`'s
+params-only input) exercised through the full `/api/jobs` HTTP path rather
+than called directly, and the critical one — `/api/chat` with the Anthropic
+API call itself mocked out (via `monkeypatch.setitem(sys.modules,
+"anthropic", ...)`) but every downstream step real: plan parsing,
+validation, actual PyQGIS execution, and results coming back in the chat
+reply.
 
 ## Verified
 

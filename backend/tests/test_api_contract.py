@@ -126,6 +126,36 @@ def test_create_job_rejects_unknown_input_reference_at_validation():
     assert any("is not a known site-context layer" in e for e in body["errors"])
 
 
+def test_create_job_rejects_two_layer_tool_missing_overlay():
+    """Regression test for a real gap: op.overlay being left null for a
+    tool that needs a second layer used to pass validation cleanly and
+    only fail as an opaque KeyError deep inside jobs.py at execution
+    time. TOOLS_REQUIRING_OVERLAY closes that for every two-layer tool,
+    old and new alike."""
+    plan = {"operations": [{"tool": "union", "input": "subject_site", "output": "x"}]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": SITE_CONTEXT})
+    body = resp.json()
+    assert body["state"] == "error"
+    assert any("requires 'overlay'" in e for e in body["errors"])
+
+
+def test_create_job_rejects_new_tools_missing_required_params():
+    cases = [
+        ({"tool": "reproject_layer", "input": "subject_site", "output": "x"}, "requires params.epsg"),
+        ({"tool": "statistics_by_categories", "input": "subject_site", "output": "x"}, "requires params.values_field"),
+        ({"tool": "eliminate_slivers", "input": "subject_site", "output": "x"}, "requires params.min_area_sqm"),
+        ({"tool": "random_points_in_polygons", "input": "subject_site", "output": "x"}, "requires params.points_per_feature"),
+        ({"tool": "regular_grid", "input": "subject_site", "output": "x"}, "requires params.spacing_m"),
+        ({"tool": "create_points_from_table", "input": "subject_site", "output": "x"}, "requires params.rows"),
+        ({"tool": "merge_vector_layers", "input": "subject_site", "output": "x"}, "requires params.input_ids"),
+    ]
+    for op, expected_fragment in cases:
+        resp = client.post("/api/jobs", json={"plan": {"operations": [op]}, "site_context": SITE_CONTEXT})
+        body = resp.json()
+        assert body["state"] == "error", f"{op['tool']}: expected a validation error, got {body}"
+        assert any(expected_fragment in e for e in body["errors"]), f"{op['tool']}: expected {expected_fragment!r} in {body['errors']}"
+
+
 def test_create_job_with_missing_layer_data_errors_clearly_without_qgis():
     """A plan can pass validation (the layer id IS in site_context.layers)
     but still have no actual feature data sent for it in layer_data - this
@@ -346,3 +376,82 @@ def test_chat_with_mocked_ai_proposes_and_executes_a_real_plan(monkeypatch):
     assert len(body["results"]["output_layers"]) == 2
     assert "Buffered the site" in body["reply"]
     assert "Done." in body["reply"]
+
+
+# ---------------------------------------------------------------------------
+# New tools (clip/intersection/etc.'s siblings) — real execution, through
+# the full /api/jobs HTTP path, not direct gis_worker calls, so this also
+# exercises jobs.py's dispatch wiring for each one, not just the function
+# itself (already smoke-tested directly against this repo's real QGIS
+# install while these were being built).
+# ---------------------------------------------------------------------------
+
+BASE_SQUARE = {"type": "FeatureCollection", "features": [
+    {"type": "Feature", "properties": {"name": "base"}, "geometry": {"type": "Polygon", "coordinates": [[[151.0, -33.8], [151.002, -33.8], [151.002, -33.802], [151.0, -33.802], [151.0, -33.8]]]}},
+]}
+OVERLAY_SQUARE = {"type": "FeatureCollection", "features": [
+    {"type": "Feature", "properties": {"name": "overlay"}, "geometry": {"type": "Polygon", "coordinates": [[[151.0005, -33.8005], [151.0015, -33.8005], [151.0015, -33.8015], [151.0005, -33.8015], [151.0005, -33.8005]]]}},
+]}
+
+
+@requires_qgis
+def test_union_requires_overlay_and_keeps_both_layers_attributes():
+    plan = {"operations": [{"tool": "union", "input": "base", "overlay": "overlay", "output": "x"}]}
+    site_context = {**SITE_CONTEXT, "layers": [
+        {"id": "base", "name": "base", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+        {"id": "overlay", "name": "overlay", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+    ]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": site_context, "layer_data": {"base": BASE_SQUARE, "overlay": OVERLAY_SQUARE}})
+    body = resp.json()
+    assert body["state"] == "done", body.get("errors")
+
+
+@requires_qgis
+def test_extract_by_location_keeps_only_matching_features():
+    plan = {"operations": [{"tool": "extract_by_location", "input": "base", "overlay": "overlay", "params": {"predicate": "intersects"}, "output": "x"}]}
+    site_context = {**SITE_CONTEXT, "layers": [
+        {"id": "base", "name": "base", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+        {"id": "overlay", "name": "overlay", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+    ]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": site_context, "layer_data": {"base": BASE_SQUARE, "overlay": OVERLAY_SQUARE}})
+    job_id = resp.json()["job_id"]
+    assert resp.json()["state"] == "done", resp.json().get("errors")
+    layer = client.get(f"/api/jobs/{job_id}/layers/x").json()["geojson"]
+    assert len(layer["features"]) == 1  # base intersects overlay, so it's kept
+
+
+@requires_qgis
+def test_create_points_from_table_ignores_input_and_uses_rows():
+    """The special case: no real `input` layer at all, geometry comes
+    entirely from params.rows."""
+    plan = {"operations": [{
+        "tool": "create_points_from_table", "input": "subject_site",
+        "params": {"rows": [{"x": 151.0, "y": -33.8, "label": "p1"}, {"x": 151.001, "y": -33.801, "label": "p2"}]},
+        "output": "pts",
+    }]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": SITE_CONTEXT})
+    body = resp.json()
+    assert body["state"] == "done", body.get("errors")
+    job_id = body["job_id"]
+    layer = client.get(f"/api/jobs/{job_id}/layers/pts").json()["geojson"]
+    assert len(layer["features"]) == 2
+    assert layer["features"][0]["geometry"]["type"] == "Point"
+
+
+@requires_qgis
+def test_merge_vector_layers_combines_input_with_params_input_ids():
+    """The other special case: a plan names more than one input layer via
+    `input` + params.input_ids rather than the usual input/overlay pair."""
+    plan = {"operations": [{"tool": "merge_vector_layers", "input": "base", "params": {"input_ids": ["overlay"]}, "output": "merged"}]}
+    site_context = {**SITE_CONTEXT, "layers": [
+        {"id": "base", "name": "base", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+        {"id": "overlay", "name": "overlay", "geometry_type": "Polygon", "fields": ["name"], "status": "complete"},
+    ]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": site_context, "layer_data": {"base": BASE_SQUARE, "overlay": OVERLAY_SQUARE}})
+    body = resp.json()
+    assert body["state"] == "done", body.get("errors")
+    job_id = body["job_id"]
+    layer = client.get(f"/api/jobs/{job_id}/layers/merged").json()["geojson"]
+    assert len(layer["features"]) == 2
+    names = sorted(f["properties"]["name"] for f in layer["features"])
+    assert names == ["base", "overlay"]

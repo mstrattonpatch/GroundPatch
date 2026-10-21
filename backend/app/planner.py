@@ -52,13 +52,23 @@ PROPOSE_PLAN_TOOL = {
                     "properties": {
                         "tool": {"type": "string", "enum": sorted(APPROVED_TOOLS.keys())},
                         "input": {"type": "string", "description": "A real layer id from the site context, 'subject_site', or an earlier operation's `output`."},
-                        "overlay": {"type": "string", "description": "Second input, for two-layer tools (clip/intersection/difference/merge_with_precedence/calculate_distance)."},
+                        "overlay": {"type": "string", "description": "Second input, for two-layer tools (clip/intersection/difference/union/merge_with_precedence/calculate_distance/extract_by_location/join_by_location/count_points_in_polygon/join_by_nearest)."},
                         "distance": {"type": "number", "description": "buffer only."},
                         "units": {"type": "string", "description": "buffer: 'metres'|'kilometres'. calculate_area: 'hectares'|'square_metres'."},
                         "output": {"type": "string", "description": "Id this result is stored under. Required unless you intend to overwrite `input` in place (e.g. calculate_area annotating its own input)."},
                         "params": {
                             "type": "object",
-                            "description": "Tool-specific extras: dissolve -> {field}; reclassify -> {field, mapping: {old: new, ...}}; filter_by_attribute -> {field, values: [...]}.",
+                            "description": (
+                                "Tool-specific extras. dissolve -> {field}; reclassify -> {field, mapping: {old: new, ...}}; "
+                                "filter_by_attribute -> {field, values: [...]}; reproject_layer -> {epsg}; "
+                                "extract_by_location/join_by_location -> {predicate: 'intersects'|'contains'|'disjoint'(extract only)|'equals'|'touches'|'overlaps'|'within'|'crosses', discard_nonmatching?(join only)}; "
+                                "count_points_in_polygon -> {count_field?}; join_by_nearest -> {max_distance?}; "
+                                "statistics_by_categories -> {values_field, categories_field}; "
+                                "eliminate_slivers -> {min_area_sqm}; random_points_in_polygons -> {points_per_feature}; "
+                                "merge_vector_layers -> {input_ids: [layer id, ...]} (combined with `input` itself); "
+                                "create_points_from_table -> {rows: [{x, y, ...}, ...], x_field?, y_field?} (ignores `input`/`overlay`); "
+                                "regular_grid -> {spacing_m, grid_type?: 'point'|'line'|'rectangle'|'diamond'|'hexagon'}."
+                            ),
                         },
                     },
                     "required": ["tool", "input"],
