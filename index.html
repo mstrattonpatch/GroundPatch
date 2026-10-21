@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>GroundPatch</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:ital,wght@1,600;1,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.markercluster: sightings layers render one real L.marker (DOM
@@ -32,284 +32,424 @@
      same code, built for exactly this plain-<script>-tag use case. -->
 <script src="https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.iife.js"></script>
 <style>
+  /* =========================================================
+     GroundPatch — visual system
+     Quiet white surfaces, near-black ink, one deep Patch green.
+     Variable NAMES are unchanged (the script references them);
+     only their values were retuned.
+  ========================================================= */
   :root{
-    --ink:#1E2A24;
-    --ink-soft:#4B564E;
-    --paper:#EDEAE0;
-    --panel:#F6F4EC;
-    --line:#C9C4B4;
-    --moss:#52684A;
-    --moss-soft:#DDE4D6;
-    --slate:#3B5567;
-    --slate-soft:#DCE4E8;
-    --amber:#B9852E;
-    --amber-soft:#F0E1C4;
-    --red:#9C3B3B;
+    /* Patch brand: New Beige #F4F0EE · Patch Green #A4B28A · Dark Green #344E41 */
+    --beige:#F4F0EE;
+    --patch-green:#A4B28A;
+    --dark-green:#344E41;
+    --ink:#1A1C1A;
+    --ink-soft:#5A5F5B;
+    --ink-faint:#868B86;
+    --rule:#1A1C1A;
+    --paper:#F4F0EE;
+    --panel:#FFFFFF;
+    --line:#E6E1DD;
+    --line-strong:#CEC8C3;
+    --moss:#344E41;
+    --moss-hover:#283D32;
+    --moss-soft:#E9EDE1;
+    --slate:#2C5366;
+    --slate-soft:#E8EEF2;
+    --amber:#A8741C;
+    --amber-soft:#FBF2E1;
+    --red:#B13A3A;
+    --night:#344E41;
+    --serif:'Lora', Georgia, serif;
+    --sans:'Montserrat', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --radius:10px;
+    --radius-sm:7px;
+    --shadow-sm:0 1px 2px rgba(16,24,20,.06);
+    --shadow-md:0 6px 24px -6px rgba(16,24,20,.18), 0 1px 3px rgba(16,24,20,.06);
+    --shadow-lg:0 24px 64px -16px rgba(10,18,14,.35);
+    --ease:cubic-bezier(.2,.7,.2,1);
   }
   *{box-sizing:border-box;}
   html,body{height:100%;margin:0;}
   body{
-    font-family:'Public Sans', system-ui, sans-serif;
+    font-family:var(--sans);
     background:var(--paper);
     color:var(--ink);
     display:flex;
     height:100vh;
     overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"ss01","cv11";
   }
   .mono{ font-family:'IBM Plex Mono', monospace; }
+  ::selection{ background:var(--patch-green); color:#fff; }
+
+  /* thin, quiet scrollbars */
+  *{ scrollbar-width:thin; scrollbar-color:var(--line-strong) transparent; }
+  *::-webkit-scrollbar{ width:8px; height:8px; }
+  *::-webkit-scrollbar-thumb{ background:var(--line-strong); border-radius:8px; border:2px solid transparent; background-clip:padding-box; }
+  *::-webkit-scrollbar-track{ background:transparent; }
+
+  /* shared form controls */
+  input[type=text], input[type=search], select{
+    font-family:inherit; font-size:13px; color:var(--ink);
+    background:var(--panel);
+    border:1px solid var(--line-strong);
+    border-radius:var(--radius-sm);
+    padding:9px 11px;
+    transition:border-color .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  input[type=text]::placeholder{ color:var(--ink-faint); }
+  input[type=text]:focus, select:focus{
+    outline:none; border-color:var(--moss);
+    box-shadow:0 0 0 3px rgba(164,178,138,.35);
+  }
+  input[type=checkbox], input[type=radio]{ accent-color:var(--moss); }
+  input[type=range]{ accent-color:var(--moss); }
+  :focus-visible{ outline:2px solid var(--moss); outline-offset:2px; }
+  input[type=file]{ font-family:inherit; font-size:11.5px; color:var(--ink-soft); }
+  input[type=file]::file-selector-button{
+    font-family:inherit; font-size:11.5px; font-weight:600; color:var(--ink);
+    background:var(--panel); border:1px solid var(--line-strong); border-radius:6px;
+    padding:5px 10px; margin-right:8px; cursor:pointer;
+  }
+  details summary{ outline-offset:2px; }
 
   /* ---------- Sidebar ---------- */
   #sidebar{
-    width:380px;
-    min-width:380px;
+    width:392px;
+    min-width:392px;
     background:var(--panel);
     border-right:1px solid var(--line);
     display:flex;
     flex-direction:column;
     overflow:hidden;
+    position:relative;
+    z-index:2;
   }
   #sidebar-scroll{
     overflow-y:auto;
     flex:1;
-    padding:20px 20px 40px;
+    padding:8px 24px 48px;
   }
   header.brand{
-    padding:18px 20px 14px;
-    border-bottom:1px solid var(--line);
+    background:var(--night);
+    color:#fff;
+    padding:22px 24px 22px;
+    position:relative;
+    overflow:hidden;
   }
+  /* faint contour lines — a nod to the ground the tool maps */
+  header.brand::after{
+    content:""; position:absolute; right:-60px; top:-70px; width:240px; height:240px;
+    border-radius:50%;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,.06),
+      0 0 0 22px #344E41, 0 0 0 23px rgba(255,255,255,.05),
+      0 0 0 46px #344E41, 0 0 0 47px rgba(255,255,255,.04),
+      0 0 0 72px #344E41, 0 0 0 73px rgba(255,255,255,.03);
+    pointer-events:none;
+  }
+  header.brand > *{ position:relative; z-index:1; }
   header.brand .brand-row{
-    display:flex; align-items:center; gap:10px; margin-bottom:2px;
+    display:flex; align-items:center; gap:12px; margin-bottom:18px;
   }
-  header.brand .brand-logo{ width:26px; flex:none; }
+  header.brand .brand-logo{
+    width:40px; height:40px; flex:none; margin:-6px -4px -6px -8px;
+    filter:brightness(0) invert(1);
+  }
   header.brand h1{
     margin:0;
-    font-size:16px;
-    font-weight:700;
-    letter-spacing:0.01em;
+    font-family:var(--sans);
+    font-size:13px;
+    font-weight:400;
+    letter-spacing:.28em;
+    text-transform:uppercase;
+    line-height:1;
   }
-  header.brand h1 .wordmark-patch{
-    font-family:'Fraunces', serif;
-    font-style:italic;
-    font-weight:700;
-    font-size:1.2em;
-    letter-spacing:-0.01em;
-    background:linear-gradient(100deg, #52684A 0%, #3B5567 100%);
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
+  .wordmark-patch{ font-weight:700; }
+  header.brand .brand-chip{
+    margin-left:auto;
+    font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--patch-green);
+    border:1px solid rgba(164,178,138,.55);
+    border-radius:999px; padding:4px 9px;
   }
   header.brand .tagline{
-    font-size:11px;
-    color:var(--ink-soft);
-    letter-spacing:0.04em;
-    text-transform:uppercase;
-    margin:2px 0 0;
+    font-family:var(--serif);
+    font-size:25px;
+    font-weight:400;
+    letter-spacing:-0.005em;
+    line-height:1.15;
+    color:#fff;
+    margin:0 0 8px;
   }
   header.brand p{
-    margin:4px 0 0;
+    margin:0;
     font-size:12.5px;
-    color:var(--ink-soft);
-    line-height:1.4;
+    color:rgba(255,255,255,.72);
+    line-height:1.6;
   }
 
-  section{ margin-bottom:22px; }
+  section{ padding:18px 0 6px; border-top:1px solid var(--rule); margin:0; }
+  #sidebar-scroll > section:first-child{ border-top:none; }
+  section:empty{ display:none; }
   section h2{
-    font-size:11.5px;
-    font-weight:600;
-    color:var(--ink-soft);
-    margin:0 0 8px;
-    padding-bottom:6px;
-    border-bottom:1px solid var(--line);
+    font-size:11px;
+    font-weight:500;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--ink);
+    margin:0 0 14px;
+    padding:0;
+    border:none;
   }
 
   /* upload */
   #dropzone{
-    border:1.5px dashed var(--line);
-    background:#fff;
-    border-radius:2px;
-    padding:16px;
+    border:1px dashed var(--line-strong);
+    background:var(--paper);
+    border-radius:var(--radius);
+    padding:20px 16px;
     text-align:center;
     font-size:12.5px;
     color:var(--ink-soft);
     cursor:pointer;
-    transition:border-color .15s;
+    transition:border-color .2s var(--ease), background .2s var(--ease);
   }
+  #dropzone .dz-icon{
+    width:36px; height:36px; margin:0 auto 10px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel); border:1px solid var(--line); color:var(--moss);
+    box-shadow:var(--shadow-sm);
+  }
+  #dropzone .dz-formats{ margin-top:4px; font-size:11px; color:var(--ink-faint); font-family:'IBM Plex Mono', monospace; }
   #dropzone:hover, #dropzone.drag{
     border-color:var(--moss);
+    background:var(--moss-soft);
     color:var(--ink);
   }
-  .buffer-control{ margin-bottom:10px; }
-  .buffer-control label{ font-size:12px; color:var(--ink); display:block; margin-bottom:4px; }
+  .buffer-control{ margin-bottom:14px; }
+  .buffer-control label{ font-size:12.5px; color:var(--ink); display:flex; justify-content:space-between; margin-bottom:6px; }
+  .buffer-control label strong{ font-family:'IBM Plex Mono', monospace; font-weight:500; font-size:12px; color:var(--moss); }
   .buffer-control input[type=range]{
-    width:100%; accent-color:var(--moss); cursor:pointer; margin:2px 0;
+    width:100%; cursor:pointer; margin:2px 0;
   }
-  .buffer-control-hint{ font-size:10.5px; color:var(--ink-soft); margin-top:2px; }
+  .buffer-control-hint{ font-size:11px; color:var(--ink-faint); margin-top:4px; line-height:1.45; }
   .buffer-control-hint .ok{ color:var(--moss); }
   .lot-search-hint{
-    font-size:11px; line-height:1.5; color:#7A5200;
-    background:var(--amber-soft); border:1px solid var(--amber);
-    border-radius:3px; padding:6px 8px; margin:-2px 0 6px;
+    font-size:11px; line-height:1.5; color:#6E4A08;
+    background:var(--amber-soft); border:1px solid #EBD3A6;
+    border-radius:var(--radius-sm); padding:8px 10px; margin:0 0 8px;
   }
   .map-legend{
-    background:var(--panel); border:1px solid var(--line); border-radius:2px;
-    padding:8px 10px; font-size:11px; max-width:220px; max-height:240px; overflow-y:auto;
-    box-shadow:0 1px 4px rgba(0,0,0,.15); display:none;
+    background:rgba(255,255,255,.96); border:1px solid var(--line); border-radius:var(--radius);
+    padding:10px 12px; font-size:11px; max-width:230px; max-height:260px; overflow-y:auto;
+    box-shadow:var(--shadow-md); display:none;
+    backdrop-filter:blur(6px);
   }
-  .legend-title{ font-weight:700; text-transform:uppercase; letter-spacing:.03em; font-size:10px; color:var(--ink-soft); margin-bottom:6px; }
-  .legend-row{ display:flex; align-items:center; gap:6px; padding:2px 0; line-height:1.3; }
-  .legend-swatch{ width:10px; height:10px; border-radius:2px; flex:none; }
+  .legend-title{ font-weight:600; text-transform:uppercase; letter-spacing:.1em; font-size:9.5px; color:var(--ink-soft); margin-bottom:8px; }
+  .legend-row{ display:flex; align-items:center; gap:7px; padding:2px 0; line-height:1.35; }
+  .legend-swatch{ width:10px; height:10px; border-radius:3px; flex:none; }
   #resumeBanner{
     display:flex; align-items:center; justify-content:space-between; gap:8px;
-    background:var(--amber-soft); border-bottom:1px solid var(--amber);
-    padding:8px 16px; font-size:11.5px; line-height:1.4;
+    background:var(--amber-soft); border-bottom:1px solid #EBD3A6;
+    padding:10px 24px; font-size:12px; line-height:1.4;
   }
-  #resumeBanner .resume-text{ color:#7A5200; }
+  #resumeBanner .resume-text{ color:#6E4A08; }
   #resumeBanner .resume-actions{ display:flex; gap:6px; flex:none; }
+  #resumeBanner button{ width:auto; margin:0; }
   #dropzone strong{ color:var(--ink); font-weight:600; }
   #fileStatus{
-    margin-top:8px;
+    margin-top:10px;
     font-size:12px;
     line-height:1.5;
   }
+  .ok{ color:var(--moss); }
+  .err{ color:var(--red); }
   #fileStatus .ok, #addressSearchStatus .ok{ color:var(--moss); }
   #fileStatus .err, #addressSearchStatus .err{ color:var(--red); }
 
+  /* address / lot search */
+  .search-field{ position:relative; margin-bottom:8px; }
+  .search-field svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); pointer-events:none; color:var(--ink-faint); }
+  #addressLotInput{
+    width:100%; padding:10px 12px 10px 34px; border-radius:999px; margin:0; font-size:13px; display:block;
+  }
   #addressSuggestions{
     display:none; position:absolute; left:0; right:0; top:100%; z-index:50;
-    background:#fff; border:1px solid var(--line);
-    max-height:240px; overflow-y:auto; margin-top:2px; border-radius:10px;
-    box-shadow:0 4px 14px rgba(0,0,0,.08);
+    background:var(--panel); border:1px solid var(--line);
+    max-height:260px; overflow-y:auto; margin-top:-2px; border-radius:var(--radius);
+    box-shadow:var(--shadow-md); padding:4px;
   }
   #addressSuggestions.show{ display:block; }
   #addressSuggestions .sugg-heading{
-    font-size:10.5px; font-weight:700; color:var(--ink-soft); text-transform:uppercase;
-    letter-spacing:.03em; padding:8px 12px 4px;
+    font-size:9.5px; font-weight:600; color:var(--ink-faint); text-transform:uppercase;
+    letter-spacing:.12em; padding:8px 10px 4px;
   }
   #addressSuggestions .sugg-item{
-    padding:8px 12px; font-size:12.5px; cursor:pointer;
+    padding:8px 10px; font-size:12.5px; cursor:pointer; border-radius:6px;
   }
   #addressSuggestions .sugg-item:hover, #addressSuggestions .sugg-item.active{
     background:var(--moss-soft);
   }
-  #addressSuggestions .sugg-empty{ padding:8px 12px; font-size:12px; color:var(--ink-soft); font-style:italic; }
+  #addressSuggestions .sugg-empty{ padding:8px 10px; font-size:12px; color:var(--ink-soft); font-style:italic; }
+  .check-row{ display:flex; align-items:center; gap:8px; font-size:12.5px; margin:10px 0 0; color:var(--ink); cursor:pointer; }
+  .check-row input{ width:15px; height:15px; margin:0; }
+  #selectLotMultiList{
+    font-size:12px; line-height:1.6; max-height:110px; overflow-y:auto;
+    border:1px solid var(--line); border-radius:var(--radius-sm); padding:8px 10px; margin-bottom:8px;
+    color:var(--ink-soft); background:var(--paper);
+  }
+  .range-row{ display:flex; align-items:center; gap:12px; }
+  .range-row input[type=range]{ flex:1; }
+  #cadastreBufferLabel{
+    font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--moss);
+    min-width:58px; text-align:right;
+  }
+  .hint{ font-size:11px; color:var(--ink-faint); margin:6px 0 0; line-height:1.5; }
+  .section-note{ font-size:12px; color:var(--ink-soft); margin:0 0 12px; line-height:1.55; }
 
   /* layer list */
+  #layerList{
+    border:1px solid var(--line); border-radius:var(--radius); padding:2px 12px;
+  }
+  #layerList:empty{ display:none; }
   .layer-row{
     display:flex;
     align-items:center;
-    gap:9px;
-    padding:7px 0;
-    border-bottom:1px solid #E4E0D2;
+    gap:10px;
+    padding:9px 0;
+    border-bottom:1px solid var(--line);
     font-size:12.5px;
   }
   .layer-row:last-child{ border-bottom:none; }
   .layer-row input[type=checkbox]{
-    width:14px; height:14px; accent-color:var(--moss); flex:none;
+    width:15px; height:15px; flex:none; margin:0; cursor:pointer;
   }
   .swatch{
-    width:10px; height:10px; flex:none; border:1px solid rgba(0,0,0,.25);
+    width:10px; height:10px; flex:none; border-radius:3px; border:1px solid rgba(0,0,0,.12);
   }
-  .layer-row .name{ flex:1; }
+  .layer-row .name{ flex:1; line-height:1.35; }
   .layer-row .cat{
-    font-size:10px; color:var(--ink-soft); text-transform:lowercase;
+    font-size:9.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-soft); background:var(--paper); border:1px solid var(--line);
+    padding:2px 7px; border-radius:999px;
   }
   .layer-row button.del{
-    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:14px; line-height:1; padding:2px;
+    background:none; border:none; color:var(--ink-faint); cursor:pointer; font-size:15px; line-height:1;
+    padding:4px; border-radius:5px;
   }
-  .layer-row button.del:hover{ color:var(--red); }
+  .layer-row button.del:hover{ color:var(--red); background:#F8E9E9; }
 
   #addLayerForm{
     margin-top:10px;
     display:none;
     flex-direction:column;
-    gap:6px;
+    gap:8px;
+    padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--paper);
   }
   #addLayerForm.open{ display:flex; }
-  #addLayerForm input, #addLayerForm select{
-    font-family:inherit;
-    font-size:12px;
-    padding:6px 8px;
-    border:1px solid var(--line);
-    border-radius:2px;
-    background:#fff;
-  }
+  #addLayerForm input, #addLayerForm select{ font-size:12.5px; }
   .textbtn{
-    background:none; border:none; color:var(--slate); font-size:12px; font-weight:600;
-    cursor:pointer; padding:0; margin-top:8px;
+    background:none; border:none; color:var(--moss); font-family:inherit; font-size:12.5px; font-weight:600;
+    cursor:pointer; padding:2px 0; margin-top:10px; letter-spacing:.005em;
+    text-decoration:underline; text-decoration-color:var(--patch-green); text-decoration-thickness:2px; text-underline-offset:4px;
+    transition:text-decoration-color .15s var(--ease);
   }
-  .textbtn:hover{ text-decoration:underline; }
+  .textbtn:hover{ text-decoration-color:var(--dark-green); }
 
+  button{ font-family:inherit; }
   button.primary{
     width:100%;
     background:var(--moss);
     color:#fff;
-    border:none;
-    padding:11px 14px;
-    font-size:13px;
+    border:1px solid var(--moss);
+    min-height:42px;
+    padding:11px 16px;
+    font-size:11.5px;
     font-weight:600;
-    border-radius:2px;
+    text-transform:uppercase;
+    border-radius:var(--radius-sm);
     cursor:pointer;
-    letter-spacing:.01em;
+    letter-spacing:.08em;
+    box-shadow:0 1px 0 rgba(255,255,255,.12) inset, var(--shadow-sm);
+    transition:background .15s var(--ease), transform .1s var(--ease);
   }
-  button.primary:hover{ background:#455c3e; }
-  button.primary:disabled{ background:#9aa596; cursor:default; }
+  button.primary:hover{ background:var(--moss-hover); border-color:var(--moss-hover); }
+  button.primary:active{ transform:translateY(1px); }
+  button.primary:disabled{ background:#BFC6B3; border-color:#BFC6B3; color:#fff; cursor:default; box-shadow:none; transform:none; }
   button.secondary{
     width:100%;
-    background:#fff;
-    border:1px solid var(--line);
+    background:var(--panel);
+    border:1px solid var(--line-strong);
     color:var(--ink);
+    min-height:40px;
     padding:9px 14px;
-    font-size:12.5px;
+    font-size:11px;
     font-weight:600;
-    border-radius:2px;
+    text-transform:uppercase;
+    letter-spacing:.07em;
+    border-radius:var(--radius-sm);
     cursor:pointer;
     margin-top:8px;
+    transition:border-color .15s var(--ease), background .15s var(--ease);
   }
-  button.secondary:hover{ border-color:var(--ink-soft); }
+  button.secondary:hover{ border-color:var(--dark-green); background:var(--beige); }
+  button.secondary:disabled{ color:var(--ink-faint); border-color:var(--line); background:var(--panel); cursor:default; }
   button.secondary.active-measure{ background:var(--moss); color:#fff; border-color:var(--moss); }
 
+  .btn-stack{ display:flex; flex-direction:column; gap:0; }
+  .btn-pair{ display:flex; gap:8px; }
+  .btn-pair button.secondary{ flex:1; }
+
   /* summary */
-  #summary{ font-size:12.5px; line-height:1.6; }
+  #summary{ font-size:12.5px; line-height:1.6; border:1px solid var(--line); border-radius:var(--radius); padding:4px 14px; }
   #summary .stat{
-    display:flex; justify-content:space-between; padding:4px 0;
-    border-bottom:1px dotted #DAD5C6;
+    display:flex; justify-content:space-between; gap:12px; padding:8px 0;
+    border-bottom:1px solid var(--line);
   }
-  #summary .stat span:last-child{ font-family:'IBM Plex Mono', monospace; }
+  #summary .stat:last-child{ border-bottom:none; }
+  #summary .stat span:first-child{ color:var(--ink-soft); }
+  #summary .stat span:last-child{ font-family:'IBM Plex Mono', monospace; font-size:12px; text-align:right; }
 
   .result-card{
     border:1px solid var(--line);
-    background:#fff;
-    margin-bottom:10px;
-    border-radius:2px;
+    background:var(--panel);
+    margin-bottom:8px;
+    border-radius:var(--radius);
     overflow:hidden;
+    transition:border-color .15s var(--ease), box-shadow .15s var(--ease);
   }
+  .result-card:hover{ border-color:var(--line-strong); box-shadow:var(--shadow-sm); }
   .result-card .rc-head{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 10px;
+    display:flex; align-items:center; gap:9px;
+    padding:10px 12px;
     font-size:12.5px; font-weight:600;
     border-bottom:1px solid var(--line);
   }
   .rc-toggle{ display:flex; flex:none; }
-  .rc-toggle input{ width:13px; height:13px; accent-color:var(--moss); cursor:pointer; }
+  .rc-toggle input{ width:14px; height:14px; cursor:pointer; margin:0; }
   .result-card .rc-body{
-    padding:9px 10px;
+    padding:10px 12px;
     font-size:12px;
     color:var(--ink-soft);
   }
   .result-card .rc-body .attr-row{
     display:flex; justify-content:space-between; gap:10px;
-    padding:2px 0;
+    padding:3px 0;
   }
   .result-card .rc-body .attr-row span:first-child{ color:var(--ink-soft); }
   .result-card .rc-body .attr-row span:last-child{ color:var(--ink); font-family:'IBM Plex Mono', monospace; font-size:11.5px; text-align:right; }
   .result-card.empty .rc-body{ font-style:italic; }
   .result-card.error .rc-head{ color:var(--red); }
   .badge{
-    font-size:10px; padding:1px 6px; border-radius:10px; font-weight:600;
+    font-size:10px; padding:2px 8px; border-radius:999px; font-weight:600; letter-spacing:.02em;
+    font-variant-numeric:tabular-nums;
   }
   .badge.hit{ background:var(--moss-soft); color:var(--moss); }
-  .badge.miss{ background:#eee; color:var(--ink-soft); }
-  .badge.err{ background:#f4dcdc; color:var(--red); }
+  .badge.miss{ background:var(--paper); color:var(--ink-soft); }
+  .badge.err{ background:#F8E6E6; color:var(--red); }
   .badge.warn{ background:#faecd0; color:#8a5a00; }
   .dc-row{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
   .dc-row:last-child{ border-bottom:none; }
@@ -325,133 +465,178 @@
     white-space:pre-wrap;
     font-family:'IBM Plex Mono', monospace;
     font-size:11.5px;
-    line-height:1.6;
-    background:#fff;
+    line-height:1.65;
+    background:var(--paper);
     border:1px solid var(--line);
-    padding:12px;
-    max-height:260px;
+    border-radius:var(--radius);
+    padding:14px;
+    max-height:280px;
     overflow-y:auto;
   }
 
   /* ---------- Chat — floating panel docked to the right of the map ---------- */
   #chatToggleBtn{
     display:none;
-    position:absolute; top:12px; right:12px; z-index:940;
-    align-items:center; gap:6px;
-    background:var(--moss); color:#fff; border:none; border-radius:20px;
-    padding:9px 16px; font-size:12.5px; font-weight:600; cursor:pointer;
-    box-shadow:0 2px 10px rgba(0,0,0,.2);
+    position:absolute; top:14px; right:64px; z-index:940;
+    align-items:center; gap:8px;
+    background:var(--night); color:#fff; border:none; border-radius:999px;
+    padding:11px 18px 11px 14px; font-size:12.5px; font-weight:600; cursor:pointer;
+    box-shadow:var(--shadow-md);
+    transition:transform .15s var(--ease), background .15s var(--ease);
+  }
+  #chatToggleBtn::before{
+    content:""; width:8px; height:8px; border-radius:50%; background:var(--patch-green);
+    box-shadow:0 0 0 3px rgba(164,178,138,.3);
   }
   #chatToggleBtn.show{ display:inline-flex; }
-  #chatToggleBtn:hover{ background:#455c3e; }
+  #chatToggleBtn:hover{ background:var(--moss-hover); transform:translateY(-1px); }
 
   #chatPanel{
     display:none;
     flex-direction:column;
-    position:absolute; top:12px; right:12px; bottom:12px;
-    width:320px; max-width:calc(100% - 24px);
+    position:absolute; top:14px; right:14px; bottom:14px;
+    width:340px; max-width:calc(100% - 28px);
     background:var(--panel);
     border:1px solid var(--line);
-    border-radius:2px;
-    box-shadow:0 4px 24px rgba(0,0,0,.2);
-    z-index:950;
+    border-radius:14px;
+    box-shadow:var(--shadow-lg);
+    z-index:1001; /* above Leaflet's corner controls, so the close button isn't hidden under the basemap switcher */
     overflow:hidden;
   }
   #chatPanel.open{ display:flex; }
   #chatPanelHeader{
     flex:none;
     display:flex; align-items:center; justify-content:space-between;
-    padding:10px 12px;
+    padding:14px 16px;
     border-bottom:1px solid var(--line);
   }
   #chatPanelHeader h2{
     margin:0; padding:0; border:none;
-    font-size:11.5px; font-weight:600; color:var(--ink-soft);
+    font-family:var(--serif); font-size:17px; font-weight:400; color:var(--ink);
   }
   #chatPanelClose{
     background:none; border:none; cursor:pointer;
-    font-size:18px; line-height:1; color:var(--ink-soft); padding:2px 6px;
+    font-size:20px; line-height:1; color:var(--ink-faint); padding:4px 8px; border-radius:6px;
   }
-  #chatPanelClose:hover{ color:var(--red); }
+  #chatPanelClose:hover{ color:var(--ink); background:var(--paper); }
   #chatPanelBody{
     flex:1; min-height:0; overflow-y:auto;
-    padding:10px 12px;
-    display:flex; flex-direction:column; gap:8px;
+    padding:14px 16px;
+    display:flex; flex-direction:column; gap:10px;
+    background:var(--paper);
   }
-  .chat-hint{ font-size:11.5px; color:var(--ink-soft); margin:0 0 2px; line-height:1.5; }
-  #chatMessages{ display:flex; flex-direction:column; gap:8px; }
+  .chat-hint{ font-size:11.5px; color:var(--ink-soft); margin:0 0 2px; line-height:1.55; }
+  #chatMessages{ display:flex; flex-direction:column; gap:10px; }
   .chat-msg{
     font-size:12.5px;
-    line-height:1.5;
-    border-radius:2px;
-    padding:8px 10px;
+    line-height:1.55;
+    border-radius:12px;
+    padding:9px 12px;
     max-width:92%;
   }
   .chat-msg b{
     display:block;
-    font-size:10px;
-    font-weight:700;
+    font-size:9.5px;
+    font-weight:600;
     text-transform:uppercase;
-    letter-spacing:.03em;
+    letter-spacing:.1em;
     margin-bottom:3px;
     color:var(--ink-soft);
   }
-  .chat-user{ background:var(--slate-soft); align-self:flex-end; }
-  .chat-assistant{ background:#fff; border:1px solid var(--line); align-self:flex-start; }
-  #chatPanelFooter{ flex:none; padding:10px 12px; border-top:1px solid var(--line); }
+  .chat-user{ background:var(--moss); color:#fff; align-self:flex-end; border-bottom-right-radius:4px; }
+  .chat-user b{ color:rgba(255,255,255,.7); }
+  .chat-assistant{ background:var(--panel); border:1px solid var(--line); align-self:flex-start; border-bottom-left-radius:4px; }
+  #chatPanelFooter{ flex:none; padding:12px 14px; border-top:1px solid var(--line); background:var(--panel); }
+  .chat-compose{ display:flex; gap:6px; }
+  #chatInput{ flex:1; min-width:0; border-radius:999px; padding:9px 14px; font-size:12.5px; }
+  #chatSend{ width:auto; margin:0; padding:8px 16px; border-radius:999px; background:var(--dark-green); color:#fff; border-color:var(--dark-green); }
+  #chatSend:hover{ background:var(--moss-hover); }
+  #chatStatus{ margin-top:6px; font-size:12px; }
   #chatStatus .err{ color:var(--red); }
 
   /* ---------- Map ---------- */
-  #mapwrap{ flex:1; position:relative; }
-  #map{ width:100%; height:100%; }
-  .leaflet-popup-content{ font-family:'Public Sans', sans-serif; font-size:12.5px; }
+  #mapwrap{ flex:1; position:relative; background:var(--paper); }
+  #map{ width:100%; height:100%; background:#E8E4E0; }
+  .leaflet-container{ font-family:var(--sans); }
+  .leaflet-popup-content{ font-family:var(--sans); font-size:12.5px; line-height:1.5; margin:14px 16px; }
+  .leaflet-popup-content-wrapper{ border-radius:12px; box-shadow:var(--shadow-md); }
+  .leaflet-popup-tip{ box-shadow:none; }
+  .leaflet-container a.leaflet-popup-close-button{ top:6px; right:6px; color:var(--ink-faint); }
+  .leaflet-bar, .leaflet-control-layers{
+    border:1px solid var(--line) !important; border-radius:var(--radius) !important;
+    box-shadow:var(--shadow-md) !important; overflow:hidden;
+  }
+  .leaflet-bar a{ color:var(--ink); border-bottom-color:var(--line); width:34px; height:34px; line-height:34px; }
+  .leaflet-bar a:hover{ background:var(--paper); }
+  .leaflet-control-layers-expanded{ padding:10px 12px; font-size:12px; }
+  .leaflet-control-attribution{ background:rgba(255,255,255,.8) !important; font-size:10px; border-top-left-radius:6px; }
+  .leaflet-control-scale-line{ border-color:var(--ink-soft); background:rgba(255,255,255,.8); }
   .lot-label-tooltip{
-    background:rgba(26,26,22,.82); color:#FFAA00; font-weight:700; font-size:12.5px;
-    padding:3px 8px; border:1px solid #FFAA00; border-radius:4px; box-shadow:none;
-    font-family:'Public Sans', sans-serif; white-space:nowrap;
+    background:rgba(14,24,19,.86); color:#FFAA00; font-weight:700; font-size:12.5px;
+    padding:3px 8px; border:1px solid #FFAA00; border-radius:5px; box-shadow:none;
+    font-family:var(--sans); white-space:nowrap;
   }
   .lot-label-tooltip::before{ display:none; }
+  .measuring .leaflet-overlay-pane, .measuring .leaflet-overlay-pane *, .measuring .leaflet-marker-pane *{ pointer-events:none !important; }
   #loadingOverlay{
-    position:absolute; inset:0; background:rgba(237,234,224,.85);
+    position:absolute; inset:0; background:rgba(244,240,238,.72);
+    backdrop-filter:blur(3px);
     display:none; align-items:center; justify-content:center;
-    font-size:13px; color:var(--ink-soft); z-index:1000;
+    font-size:13px; color:var(--ink); z-index:1000;
   }
+  #loadingOverlay > div{
+    display:flex; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:999px;
+    padding:12px 20px 12px 14px; box-shadow:var(--shadow-md); font-weight:500;
+  }
+  #loadingOverlay > div::before{
+    content:""; width:16px; height:16px; border-radius:50%;
+    border:2px solid var(--moss-soft); border-top-color:var(--moss);
+    animation:gp-spin .8s linear infinite;
+  }
+  @keyframes gp-spin{ to{ transform:rotate(360deg); } }
   #loadingOverlay.show{ display:flex; }
 
   /* ---------- Export list (GeoJSON / Shapefile) ---------- */
+  #exportList{ border:1px solid var(--line); border-radius:var(--radius); padding:0 12px; }
+  #exportList:empty{ display:none; }
   .export-row{
     display:flex; align-items:center; gap:8px;
-    padding:6px 0; border-bottom:1px dotted #DAD5C6; font-size:12px;
+    padding:8px 0; border-bottom:1px solid var(--line); font-size:12px;
   }
+  .export-row:last-child{ border-bottom:none; }
   .export-row .name{ flex:1; }
   .export-row button{
-    font-family:inherit; font-size:11px; font-weight:600;
-    padding:4px 8px; border:1px solid var(--line); background:#fff; border-radius:2px; cursor:pointer;
+    font-family:inherit; font-size:11px; font-weight:600; color:var(--ink);
+    padding:5px 9px; border:1px solid var(--line-strong); background:var(--panel); border-radius:6px; cursor:pointer;
   }
-  .export-row button:hover{ border-color:var(--ink-soft); }
-  .export-row button:disabled{ color:#bbb; cursor:default; border-color:#eee; }
+  .export-row button:hover{ border-color:var(--ink); }
+  .export-row button:disabled{ color:#BCC1BD; cursor:default; border-color:var(--line); }
 
   /* ---------- Figure stage (matches Kembla_Grange_A4_Portrait.qpt) ---------- */
   #figureStage{
-    display:none; position:fixed; inset:0; background:#6b6b64; z-index:2000;
-    overflow:auto; padding:28px; align-items:flex-start; justify-content:center;
+    display:none; position:fixed; inset:0; background:#26332C; z-index:2000;
+    overflow:auto; padding:32px; align-items:flex-start; justify-content:center;
   }
   #figureStage.show{ display:flex; }
   #figureToolbar{
-    position:fixed; top:14px; right:14px; display:flex; gap:8px; z-index:2001;
+    position:fixed; top:16px; right:16px; display:flex; gap:8px; z-index:2001;
   }
   #figureToolbar button{
-    font-family:'Public Sans', sans-serif; font-size:12.5px; font-weight:600;
-    padding:9px 16px; border-radius:2px; border:none; cursor:pointer;
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:10px 18px; border-radius:999px; border:none; cursor:pointer;
+    box-shadow:var(--shadow-md);
   }
   #figureToolbar .print{ background:var(--moss); color:#fff; }
+  #figureToolbar .print:hover{ background:var(--moss-hover); }
   #figureToolbar .close{ background:#fff; color:var(--ink); }
 
+  /* the printed figure keeps its original template look */
   #figurePage{
     background:#fff; width:210mm; aspect-ratio:210/297; flex:none;
-    box-shadow:0 8px 40px rgba(0,0,0,.35);
+    box-shadow:0 12px 48px rgba(0,0,0,.45);
     display:flex; flex-direction:column; overflow:hidden;
-    font-family:'Public Sans', sans-serif;
+    font-family:'Public Sans', 'Montserrat', sans-serif;
   }
   #figureMapSlot{ flex:1; position:relative; min-height:0; }
   #figureMapSlot #map{ position:absolute; inset:0; width:100%; height:100%; }
@@ -492,77 +677,98 @@
     #figureToolbar, #figureStage{ background:none; }
   }
 
+  /* ---------- Modals (shared) ---------- */
+  #welcomeModal, #qgisScriptModal, #attrTableModal, #bioConstraintsModal{
+    position:fixed; inset:0; background:rgba(26,32,28,.5);
+    backdrop-filter:blur(4px);
+    align-items:center; justify-content:center; padding:20px;
+  }
+  #welcomeCard, #qgisScriptCard, #attrTableCard, #bioConstraintsCard{
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    box-shadow:var(--shadow-lg);
+    animation:gp-rise .25s var(--ease);
+  }
+  @keyframes gp-rise{ from{ opacity:0; transform:translateY(8px) scale(.99); } to{ opacity:1; transform:none; } }
+  #qgisScriptCard p.modal-eyebrow, #bioConstraintsCard > p.modal-eyebrow{
+    font-size:10.5px; line-height:1.4; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--ink); padding-bottom:10px; border-bottom:1px solid var(--rule);
+    margin:0 0 8px;
+  }
+
   /* ---------- Welcome modal ---------- */
-  #welcomeModal{
-    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3000;
-    display:flex; align-items:center; justify-content:center; padding:20px;
-  }
+  #welcomeModal{ z-index:3000; display:flex; }
   #welcomeCard{
-    background:var(--panel); border:1px solid var(--line); max-width:420px;
-    width:100%; padding:28px 26px 24px; text-align:center;
+    max-width:440px; width:100%; padding:0; overflow:hidden; text-align:left;
   }
-  #welcomeCard img{ width:52px; margin-bottom:16px; }
-  #welcomeCard h2{ font-size:16px; margin:0 0 12px; font-weight:700; }
-  #welcomeCard p{ font-size:13px; line-height:1.6; color:var(--ink-soft); margin:0 0 10px; text-align:left; }
-  #welcomeCard p a{ color:var(--slate); }
-  #welcomeCard button{ margin-top:14px; width:100%; }
+  #welcomeCard .wc-hero{
+    background:var(--night); color:#fff; padding:28px 28px 26px; position:relative; overflow:hidden;
+  }
+  #welcomeCard .wc-hero::after{
+    content:""; position:absolute; right:-70px; bottom:-120px; width:260px; height:260px; border-radius:50%;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,.07),
+      0 0 0 24px #344E41, 0 0 0 25px rgba(255,255,255,.05),
+      0 0 0 50px #344E41, 0 0 0 51px rgba(255,255,255,.035);
+    pointer-events:none;
+  }
+  #welcomeCard .wc-hero > *{ position:relative; z-index:1; }
+  #welcomeCard img{ width:56px; margin:-8px 0 14px -10px; filter:brightness(0) invert(1); display:block; }
+  #welcomeCard h2{ font-family:var(--sans); font-size:15px; margin:0 0 10px; font-weight:400; letter-spacing:.28em; text-transform:uppercase; line-height:1; }
+  #welcomeCard .wc-sub{ font-family:var(--serif); font-size:19px; color:#fff; margin:0; line-height:1.3; }
+  #welcomeCard .wc-body{ padding:22px 28px 26px; }
+  #welcomeCard p{ font-size:13px; line-height:1.6; color:var(--ink-soft); margin:0 0 10px; }
+  #welcomeCard .wc-body p:first-child{ color:var(--ink); font-weight:500; }
+  #welcomeCard p a{ color:var(--moss); font-weight:600; text-underline-offset:3px; }
+  #welcomeCard button{ margin-top:12px; width:100%; }
 
   /* ---------- QGIS script modal ---------- */
-  #qgisScriptModal{
-    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3100;
-    display:none; align-items:center; justify-content:center; padding:20px;
-  }
+  #qgisScriptModal{ z-index:3100; display:none; }
   #qgisScriptModal.show{ display:flex; }
   #qgisScriptCard{
-    background:var(--panel); border:1px solid var(--line); max-width:680px;
-    width:100%; max-height:90vh; padding:24px 24px 20px; display:flex; flex-direction:column;
+    max-width:720px;
+    width:100%; max-height:90vh; padding:28px 28px 24px; display:flex; flex-direction:column;
   }
-  #qgisScriptCard h2{ font-size:15px; margin:0 0 8px; font-weight:700; }
-  #qgisScriptCard h3{ font-size:11.5px; margin:16px 0 8px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.03em; }
-  #qgisScriptCard p{ font-size:12.5px; line-height:1.6; color:var(--ink-soft); margin:0 0 12px; }
-  #qgisScriptCard .steps{ display:flex; gap:12px; margin-bottom:4px; }
+  #qgisScriptCard h2{ font-family:var(--serif); font-size:24px; margin:0 0 8px; font-weight:400; }
+  #qgisScriptCard h3{ font-size:10px; margin:18px 0 10px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.12em; }
+  #qgisScriptCard p{ font-size:13px; line-height:1.6; color:var(--ink-soft); margin:0 0 4px; }
+  #qgisScriptCard .steps{ display:flex; gap:14px; margin-bottom:4px; }
   #qgisScriptCard .step{ flex:1; min-width:0; }
-  #qgisScriptCard .step img{ width:100%; border:1px solid var(--line); display:block; background:#fff; }
-  #qgisScriptCard .step .step-label{ font-size:11px; color:var(--ink-soft); margin-top:6px; line-height:1.5; }
-  #qgisScriptCard .step .step-num{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:var(--moss); color:#fff; font-size:10px; font-weight:700; margin-right:5px; flex:none; }
+  #qgisScriptCard .step img{ width:100%; border:1px solid var(--line); border-radius:var(--radius-sm); display:block; background:#fff; }
+  #qgisScriptCard .step .step-label{ font-size:11.5px; color:var(--ink-soft); margin-top:8px; line-height:1.5; }
+  #qgisScriptCard .step .step-num{ display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:var(--moss); color:#fff; font-size:10px; font-weight:700; margin-right:6px; flex:none; }
   #qgisScriptCard pre{
-    background:#fff; border:1px solid var(--line); padding:12px;
-    font-family:'IBM Plex Mono', monospace; font-size:10.5px; line-height:1.5;
-    overflow:auto; flex:1; min-height:0; max-height:220px; white-space:pre; margin:8px 0 12px;
+    background:#26332C; color:#E3E8DA; border:none; border-radius:var(--radius); padding:14px 16px;
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; line-height:1.6;
+    overflow:auto; flex:1; min-height:0; max-height:220px; white-space:pre; margin:0 0 14px;
   }
   #qgisScriptCard .btn-row{ display:flex; gap:8px; flex:none; }
-  #qgisScriptCard .btn-row button{ flex:1; }
-  #qgisScriptCard .btn-row button:disabled{ background:#c9c4b4; color:#8a8577; cursor:not-allowed; border-color:#c9c4b4; }
-  #qgisScriptCard .lock-hint{ font-size:11px; color:var(--ink-soft); text-align:center; margin:6px 0 0; }
+  #qgisScriptCard .btn-row button{ flex:1; margin-top:0; }
+  #qgisScriptCard .btn-row button:disabled{ background:var(--paper); color:var(--ink-faint); cursor:not-allowed; border-color:var(--line); }
+  #qgisScriptCard .lock-hint{ font-size:11px; color:var(--ink-faint); text-align:center; margin:8px 0 0; }
 
   /* ---------- Attribute table modal ---------- */
-  #attrTableModal{
-    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3300;
-    display:none; align-items:center; justify-content:center; padding:20px;
-  }
+  #attrTableModal{ z-index:3300; display:none; }
   #attrTableModal.show{ display:flex; }
   #attrTableCard{
-    background:var(--panel); border:1px solid var(--line); max-width:min(1100px, 96vw);
+    max-width:min(1100px, 96vw);
     width:100%; max-height:90vh; padding:20px 20px 16px; display:flex; flex-direction:column;
   }
-  #attrTableCard .at-head{ display:flex; align-items:center; gap:10px; margin-bottom:10px; flex:none; }
-  #attrTableCard h2{ font-size:15px; margin:0; font-weight:700; flex:1; min-width:0; }
-  #attrTableCard .at-count{ font-size:11.5px; color:var(--ink-soft); flex:none; }
+  #attrTableCard .at-head{ display:flex; align-items:center; gap:12px; margin-bottom:14px; flex:none; flex-wrap:wrap; }
+  #attrTableCard h2{ font-family:var(--serif); font-size:20px; margin:0; font-weight:400; flex:1; min-width:0; }
+  #attrTableCard .at-count{ font-size:11.5px; color:var(--ink-soft); flex:none; font-family:'IBM Plex Mono', monospace; }
   #attrTableCard #attrTableFilter{
-    font-family:inherit; font-size:12px; padding:6px 10px; border:1px solid var(--line);
-    border-radius:2px; width:220px; flex:none;
+    font-size:12.5px; padding:8px 12px; border-radius:999px; width:220px; flex:none;
   }
   #attrTableCard .at-close{
-    background:none; border:none; font-size:18px; line-height:1; cursor:pointer;
-    color:var(--ink-soft); flex:none; padding:0 2px;
+    background:none; border:none; font-size:22px; line-height:1; cursor:pointer;
+    color:var(--ink-faint); flex:none; padding:4px 8px; border-radius:6px;
   }
-  #attrTableCard .at-close:hover{ color:var(--ink); }
-  #attrTableWrap{ overflow:auto; flex:1; min-height:0; border:1px solid var(--line); }
+  #attrTableCard .at-close:hover{ color:var(--ink); background:var(--paper); }
+  #attrTableWrap{ overflow:auto; flex:1; min-height:0; border:1px solid var(--line); border-radius:var(--radius); }
   #attrTableWrap table{ border-collapse:collapse; font-size:11.5px; white-space:nowrap; }
-  #attrTableWrap th, #attrTableWrap td{ padding:5px 9px; border-bottom:1px solid var(--line); text-align:left; }
+  #attrTableWrap th, #attrTableWrap td{ padding:7px 11px; border-bottom:1px solid var(--line); text-align:left; }
   #attrTableWrap th{
-    background:var(--panel); position:sticky; top:0; cursor:pointer; user-select:none;
-    font-weight:700; color:var(--ink-soft); text-transform:uppercase; font-size:10px; letter-spacing:.02em;
+    background:var(--paper); position:sticky; top:0; cursor:pointer; user-select:none;
+    font-weight:600; color:var(--ink-soft); text-transform:uppercase; font-size:9.5px; letter-spacing:.08em;
   }
   #attrTableWrap th:hover{ color:var(--ink); }
   #attrTableWrap th .sort-arrow{ opacity:.5; margin-left:3px; }
@@ -570,72 +776,88 @@
   #attrTableWrap tr.at-clickable{ cursor:pointer; }
 
   /* ---------- Biodiversity constraints modal ---------- */
-  #bioConstraintsModal{
-    position:fixed; inset:0; background:rgba(30,42,36,.55); z-index:3200;
-    display:none; align-items:center; justify-content:center; padding:20px;
-  }
+  #bioConstraintsModal{ z-index:3200; display:none; }
   #bioConstraintsModal.show{ display:flex; }
   #bioConstraintsCard{
-    background:var(--panel); border:1px solid var(--line); max-width:640px;
-    width:100%; max-height:90vh; padding:24px 24px 20px; display:flex; flex-direction:column;
+    max-width:660px;
+    width:100%; max-height:90vh; padding:28px 28px 24px; display:flex; flex-direction:column;
   }
-  #bioConstraintsCard h2{ font-size:15px; margin:0 0 6px; font-weight:700; }
-  #bioConstraintsCard > p{ font-size:12.5px; line-height:1.6; color:var(--ink-soft); margin:0 0 14px; }
-  #bcSourceList{ overflow-y:auto; flex:1; min-height:0; border:1px solid var(--line); margin-bottom:14px; }
-  .bc-layer-group{ border-bottom:1px solid var(--line); }
+  #bioConstraintsCard h2{ font-family:var(--serif); font-size:24px; margin:0 0 8px; font-weight:400; }
+  #bioConstraintsCard > p{ font-size:13px; line-height:1.6; color:var(--ink-soft); margin:0 0 16px; }
+  #bcSourceList{ overflow-y:auto; flex:1; min-height:0; border:1px solid var(--line); border-radius:var(--radius); margin-bottom:16px; }
+  .bc-layer-group{ border-bottom:1px solid var(--line); padding-bottom:4px; }
   .bc-layer-group:last-child{ border-bottom:none; }
-  .bc-layer-name{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); padding:8px 10px 4px; }
-  .bc-class-row{ display:flex; align-items:center; gap:10px; padding:5px 10px 5px 16px; font-size:12px; }
+  .bc-layer-name{ font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-soft); padding:12px 14px 6px; }
+  .bc-class-row{ display:flex; align-items:center; gap:10px; padding:6px 14px 6px 18px; font-size:12px; }
+  .bc-class-row:hover{ background:var(--paper); }
   .bc-class-row .bc-class-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bc-class-row .bc-area{ font-size:11px; color:var(--ink-soft); flex:none; }
-  .bc-tier-radios{ display:flex; gap:6px; flex:none; }
+  .bc-class-row .bc-area{ font-size:11px; color:var(--ink-soft); flex:none; font-family:'IBM Plex Mono', monospace; }
+  .bc-tier-radios{ display:flex; gap:8px; flex:none; }
   .bc-tier-radios label{ display:flex; align-items:center; gap:3px; font-size:10.5px; color:var(--ink-soft); cursor:pointer; }
-  .bc-empty{ padding:16px 10px; font-size:12px; color:var(--ink-soft); text-align:center; }
-  #bcUploadRows{ display:flex; flex-direction:column; gap:8px; margin-bottom:14px; flex:none; }
-  .bc-upload-row{ display:flex; align-items:center; gap:8px; font-size:12px; }
-  .bc-upload-row .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:2px; }
-  .bc-upload-row .bc-upload-name{ flex:none; width:52px; color:var(--ink-soft); }
-  .bc-upload-row input[type=file]{ font-size:11px; max-width:150px; flex:none; }
+  .bc-empty{ padding:20px 14px; font-size:12px; color:var(--ink-soft); text-align:center; }
+  #bcUploadRows{ display:flex; flex-direction:column; gap:10px; margin-bottom:16px; flex:none; }
+  .bc-upload-row{ display:flex; align-items:center; gap:10px; font-size:12px; }
+  .bc-upload-row .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:3px; }
+  .bc-upload-row .bc-upload-name{ flex:none; width:56px; color:var(--ink); font-weight:500; }
+  .bc-upload-row input[type=file]{ max-width:220px; flex:none; }
   .bc-upload-row .bc-upload-status{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; color:var(--ink-soft); }
-  .bc-remaining-low{ display:flex; align-items:flex-start; gap:8px; font-size:11px; line-height:1.5; color:var(--ink-soft); cursor:pointer; padding:6px 2px 0; }
+  .bc-remaining-low{ display:flex; align-items:flex-start; gap:10px; font-size:11.5px; line-height:1.5; color:var(--ink-soft); cursor:pointer; padding:10px 12px; margin-top:2px; background:var(--paper); border-radius:var(--radius-sm); }
   .bc-remaining-low input{ margin-top:2px; flex:none; }
   .bc-remaining-low strong{ color:var(--ink); }
   #bcGenerateStatus{ font-size:12px; margin-bottom:8px; min-height:16px; flex:none; }
   #bcGenerateStatus .err{ color:var(--red); }
   #bcGenerateStatus .ok{ color:var(--moss); }
   #bioConstraintsCard .btn-row{ display:flex; gap:8px; flex:none; }
-  #bioConstraintsCard .btn-row button{ flex:1; }
+  #bioConstraintsCard .btn-row button{ flex:1; margin-top:0; }
 
   /* ---------- Fetch progress bar (BioNet queries can take a while to
      page through) — a real 0-100% bar split across named stages, see
      makeStageProgress(). ---------- */
-  .fetch-progress-wrap{ margin-top:6px; }
-  .fetch-progress-label{ font-size:11.5px; color:var(--ink-soft); margin-bottom:3px; }
-  .fetch-progress-track{ height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
-  .fetch-progress-fill{ height:100%; background:var(--moss); border-radius:3px; transition:width 0.3s ease; }
+  .fetch-progress-wrap{ margin-top:8px; }
+  .fetch-progress-label{ font-size:11.5px; color:var(--ink-soft); margin-bottom:5px; }
+  .fetch-progress-track{ height:4px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .fetch-progress-fill{ height:100%; background:var(--moss); border-radius:4px; transition:width 0.3s ease; }
 
   /* ---------- Biodiversity constraints result (sidebar) ---------- */
-  .bc-tier-summary{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dotted #DAD5C6; font-size:12px; }
+  .bc-tier-summary{ display:flex; align-items:center; gap:9px; padding:8px 0; border-bottom:1px solid var(--line); font-size:12.5px; }
   .bc-tier-summary:last-of-type{ border-bottom:none; }
-  .bc-tier-summary .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:2px; }
+  .bc-tier-summary .bc-tier-swatch{ width:11px; height:11px; flex:none; border-radius:3px; }
   .bc-tier-summary .bc-tier-name{ flex:1; }
-  .bc-tier-summary .bc-tier-ha{ color:var(--ink-soft); }
+  .bc-tier-summary .bc-tier-ha{ color:var(--ink-soft); font-family:'IBM Plex Mono', monospace; font-size:11.5px; }
+
+  /* ---------- Narrow screens: stack sidebar over map ---------- */
+  @media (max-width: 820px){
+    body{ flex-direction:column; height:auto; min-height:100vh; overflow:auto; }
+    #sidebar{ width:100%; min-width:0; border-right:none; border-bottom:1px solid var(--line); overflow:visible; }
+    #sidebar-scroll{ overflow:visible; }
+    #mapwrap{ height:70vh; flex:none; }
+    #qgisScriptCard .steps{ flex-direction:column; }
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{ animation:none !important; transition:none !important; }
+  }
 </style>
 </head>
 <body>
 
 <div id="welcomeModal">
   <div id="welcomeCard">
-    <img src="data:image/png;base64,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" alt="Patch">
-    <h2>Ground<span class="wordmark-patch">Patch</span></h2>
-    <p>This is a draft tool for internal use only.</p>
-    <p>Please reach out to <a href="mailto:mstratton@patchplanning.com.au">mstratton@patchplanning.com.au</a> for feedback or to report bugs.</p>
-    <button class="primary" id="dismissWelcome">Continue</button>
+    <div class="wc-hero">
+      <img src="data:image/png;base64,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" alt="Patch">
+      <h2>Ground<span class="wordmark-patch">Patch</span></h2>
+      <p class="wc-sub">Site Constraints Mapper</p>
+    </div>
+    <div class="wc-body">
+      <p>This is a draft tool for internal use only.</p>
+      <p>Please reach out to <a href="mailto:mstratton@patchplanning.com.au">mstratton@patchplanning.com.au</a> for feedback or to report bugs.</p>
+      <button class="primary" id="dismissWelcome">Continue</button>
+    </div>
   </div>
 </div>
 
 <div id="qgisScriptModal">
   <div id="qgisScriptCard">
+    <p class="modal-eyebrow">Export</p>
     <h2>QGIS styling script</h2>
     <p>Your shapefiles are downloading. Load them into QGIS, then follow the steps below to style everything automatically.</p>
 
@@ -666,8 +888,8 @@
     <div class="at-head">
       <h2 id="attrTableTitle">Attribute table</h2>
       <span class="at-count" id="attrTableCount"></span>
-      <input type="text" id="attrTableFilter" placeholder="Filter rows…">
-      <button class="at-close" id="closeAttrTable" title="Close">&times;</button>
+      <input type="text" id="attrTableFilter" placeholder="Filter rows…" aria-label="Filter rows">
+      <button class="at-close" id="closeAttrTable" title="Close" aria-label="Close">&times;</button>
     </div>
     <div id="attrTableWrap"></div>
   </div>
@@ -675,6 +897,7 @@
 
 <div id="bioConstraintsModal">
   <div id="bioConstraintsCard">
+    <p class="modal-eyebrow">Biodiversity</p>
     <h2>Create biodiversity constraints</h2>
     <p>Assign the layer classes already downloaded — clipped to the subject site boundary only — to a High, Medium or Low constraint tier, or add your own extra polygons below. Where tiers overlap, High always wins over Medium, and Medium always wins over Low.</p>
     <div id="bcSourceList"></div>
@@ -715,9 +938,10 @@
     <div class="brand-row">
       <img class="brand-logo" src="data:image/png;base64,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" alt="Patch">
       <h1>Ground<span class="wordmark-patch">Patch</span></h1>
+      <span class="brand-chip">Prototype</span>
     </div>
     <p class="tagline">Site Constraints Mapper</p>
-    <p>Upload a project boundary, query live NSW ecology spatial layers against it, and get a site summary. Prototype — add your own hosted layers below.</p>
+    <p>Upload a project boundary, query live NSW ecology spatial layers against it, and get a site summary. Add your own hosted layers below.</p>
   </header>
 
   <div id="resumeBanner" style="display:none;"></div>
@@ -727,13 +951,16 @@
     <section>
       <h2>Project boundary</h2>
       <div class="buffer-control">
-        <label for="assessmentBufferSlider">Assessment buffer: <strong id="assessmentBufferValue">5km</strong></label>
+        <label for="assessmentBufferSlider"><span>Assessment buffer</span><strong id="assessmentBufferValue">5km</strong></label>
         <input type="range" id="assessmentBufferSlider" min="0.5" max="5" step="0.5" value="5">
         <div class="buffer-control-hint" id="assessmentBufferHint">Sets the ecology/planning buffer size — applies when the boundary is next loaded.</div>
       </div>
       <div id="dropzone">
+        <div class="dz-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        </div>
         <div><strong>Click to upload</strong> or drag a file here</div>
-        <div style="margin-top:4px;">.geojson · .json · .kml · .zip (shapefile)</div>
+        <div class="dz-formats">.geojson · .json · .kml · .zip (shapefile)</div>
       </div>
       <input type="file" id="fileInput" accept=".geojson,.json,.kml,.zip" style="display:none">
       <div id="fileStatus"></div>
@@ -742,24 +969,24 @@
     <section>
       <h2>Find by address or Lot/DP</h2>
       <div style="position:relative;">
-        <div style="position:relative;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B655C" stroke-width="2.2" style="position:absolute; left:11px; top:50%; transform:translateY(-50%); pointer-events:none;">
+        <div class="search-field">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
-          <input type="text" id="addressLotInput" placeholder="e.g. 51 Edith St Leichhardt, or 1/DP709613" style="width:100%;font-family:inherit;font-size:12px;padding:8px 10px 8px 30px;border:1px solid var(--line);border-radius:16px;margin-bottom:6px;" autocomplete="off">
+          <input type="text" id="addressLotInput" placeholder="e.g. 51 Edith St Leichhardt, or 1/DP709613" aria-label="Address or Lot/DP" autocomplete="off">
         </div>
         <div id="addressSuggestions"></div>
       </div>
       <div id="lotSearchHint" class="lot-search-hint" style="display:none;">A plan number on its own (e.g. DP709613) forces a slow, unindexed search across every lot in NSW and can take up to a minute, or time out — add the lot number too (e.g. <strong>1/DP709613</strong>) for a near-instant, indexed search instead.</div>
-      <button class="secondary" id="runAddressSearch">Search</button>
+      <button class="secondary" id="runAddressSearch" style="margin-top:0;">Search</button>
       <div id="addressSearchStatus" style="margin-top:6px;font-size:12px;"></div>
-      <button class="secondary" id="selectLotToggleBtn" style="margin-top:8px;">Or select a lot by clicking the map</button>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0 0;"><input type="checkbox" id="selectLotMultiToggle"> Select multiple lots (combine into one boundary)</label>
+      <button class="secondary" id="selectLotToggleBtn">Or select a lot by clicking the map</button>
+      <label class="check-row"><input type="checkbox" id="selectLotMultiToggle"> Select multiple lots (combine into one boundary)</label>
       <div id="selectLotStatus" style="font-size:12px;margin-top:6px;"></div>
-      <div id="selectLotMultiPanel" style="display:none;margin-top:6px;">
-        <div id="selectLotMultiList" style="font-size:12px;line-height:1.6;max-height:110px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-bottom:6px;color:var(--ink-soft);">No lots selected yet — click lots on the map to add them.</div>
-        <div style="display:flex;gap:6px;">
-          <button class="secondary" id="useMultiLotBoundaryBtn" style="flex:1;" disabled>Use selected lots as boundary</button>
+      <div id="selectLotMultiPanel" style="display:none;margin-top:8px;">
+        <div id="selectLotMultiList">No lots selected yet — click lots on the map to add them.</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="secondary" id="useMultiLotBoundaryBtn" style="flex:1;margin:0;" disabled>Use selected lots as boundary</button>
           <button class="textbtn" id="clearMultiLotBtn" style="margin:0;">Clear</button>
         </div>
       </div>
@@ -767,11 +994,11 @@
 
     <section>
       <h2>Cadastre search radius</h2>
-      <div style="display:flex;align-items:center;gap:10px;">
-        <input type="range" id="cadastreBufferSlider" min="100" max="2000" step="50" value="500" style="flex:1;accent-color:var(--moss);">
-        <span id="cadastreBufferLabel" style="font-size:12px;color:var(--ink-soft);min-width:52px;text-align:right;">500 m</span>
+      <div class="range-row">
+        <input type="range" id="cadastreBufferSlider" min="100" max="2000" step="50" value="500" aria-label="Cadastre search radius">
+        <span id="cadastreBufferLabel">500 m</span>
       </div>
-      <p style="font-size:11px;color:var(--ink-soft);margin-top:4px;">How far beyond the site boundary to pull neighbouring lots (up to 2km). Updates the preview circle immediately — click "Fetch site data" to (re)download cadastre at this radius.</p>
+      <p class="hint">How far beyond the site boundary to pull neighbouring lots (up to 2km). Updates the preview circle immediately — click "Fetch site data" to (re)download cadastre at this radius.</p>
     </section>
 
     <section>
@@ -793,10 +1020,12 @@
 
     <section>
       <button class="primary" id="runQuery" disabled>Fetch site data</button>
-      <button class="secondary" id="saveSessionFileBtn" style="margin-top:6px;">Save session to file…</button>
-      <button class="secondary" id="loadSessionFileBtn" style="margin-top:6px;">Load session from file…</button>
+      <div class="btn-pair">
+        <button class="secondary" id="saveSessionFileBtn">Save session…</button>
+        <button class="secondary" id="loadSessionFileBtn">Load session…</button>
+      </div>
       <input type="file" id="loadSessionFileInput" accept=".json" style="display:none">
-      <button class="secondary" id="newSiteBtn" style="margin-top:6px;">New site…</button>
+      <button class="secondary" id="newSiteBtn">New site…</button>
     </section>
 
     <section id="summarySection" style="display:none;">
@@ -830,42 +1059,42 @@
       <h2>Export data</h2>
       <button class="primary" id="downloadAllZip">Export assessment package (.zip)</button>
       <div id="exportList" style="margin-top:12px;"></div>
-      <button class="secondary" id="exportReportXlsx" style="margin-top:4px;">Export report (.xlsx)</button>
-      <button class="textbtn" id="viewQgisScript" style="margin-top:8px;">View QGIS styling script</button>
+      <button class="secondary" id="exportReportXlsx">Export report (.xlsx)</button>
+      <button class="textbtn" id="viewQgisScript">View QGIS styling script</button>
     </section>
 
     <section id="bioConstraintsSection" style="display:none;">
       <h2>Biodiversity constraints</h2>
-      <button class="secondary" id="openBioConstraints">Create biodiversity constraints…</button>
+      <button class="secondary" id="openBioConstraints" style="margin-top:0;">Create biodiversity constraints…</button>
       <div id="bioConstraintsResult" style="margin-top:10px;"></div>
     </section>
 
     <section id="threatenedSpeciesSection" style="display:none;">
       <h2>Threatened species (BioNet)</h2>
-      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against BioNet's ThreatenedBiodiversity_Species dataset, cross-referenced against the PCTs (and IBRA subregion) found on the subject site — fetched fresh every time, never bundled or cached data.</p>
-      <button class="secondary" id="fetchThreatenedSpecies">Fetch threatened species list</button>
+      <p class="section-note">Live query against BioNet's ThreatenedBiodiversity_Species dataset, cross-referenced against the PCTs (and IBRA subregion) found on the subject site — fetched fresh every time, never bundled or cached data.</p>
+      <button class="secondary" id="fetchThreatenedSpecies" style="margin-top:0;">Fetch threatened species list</button>
       <div id="tsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
       <div id="threatenedSpeciesResult" style="margin-top:8px;"></div>
     </section>
 
     <section id="speciesSightingsSection" style="display:none;">
       <h2>Species sightings (BioNet Atlas)</h2>
-      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against BioNet Atlas's Species Sightings records within the assessment buffer — the same records the department's own Atlas Search finds — fetched fresh every time. Also fills the Atlas Count columns in the threatened species export above, if that's been run this session.</p>
-      <button class="secondary" id="fetchSpeciesSightings">Fetch species sightings</button>
+      <p class="section-note">Live query against BioNet Atlas's Species Sightings records within the assessment buffer — the same records the department's own Atlas Search finds — fetched fresh every time. Also fills the Atlas Count columns in the threatened species export above, if that's been run this session.</p>
+      <button class="secondary" id="fetchSpeciesSightings" style="margin-top:0;">Fetch species sightings</button>
       <div id="sightingsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
       <div id="speciesSightingsResult" style="margin-top:8px;"></div>
     </section>
 
     <section id="koalaSightingsSection" style="display:none;">
       <h2>Koala sightings</h2>
-      <p style="font-size:11.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;">Live query against the Koala Species Sightings layer within the assessment buffer, fetched independently of the main "Fetch site data" run.</p>
-      <button class="secondary" id="fetchKoalaSightings">Fetch koala sightings</button>
+      <p class="section-note">Live query against the Koala Species Sightings layer within the assessment buffer, fetched independently of the main "Fetch site data" run.</p>
+      <button class="secondary" id="fetchKoalaSightings" style="margin-top:0;">Fetch koala sightings</button>
       <div id="koalaFetchStatus" style="font-size:12px;margin-top:6px;"></div>
     </section>
 
     <section>
       <h2>Measure</h2>
-      <button class="secondary" id="measureToggleBtn">Measure distance/area</button>
+      <button class="secondary" id="measureToggleBtn" style="margin-top:0;">Measure distance/area</button>
       <div id="measurePanel" style="display:none;margin-top:8px;">
         <div id="measureStatus" style="font-size:12px;color:var(--ink-soft);">Click the map to start measuring.</div>
         <button class="textbtn" id="measureClearBtn" style="margin-top:6px;">Clear points</button>
@@ -874,14 +1103,14 @@
 
     <section id="figureSection" style="display:none;">
       <h2>Figure export</h2>
-      <select id="platePreset" style="width:100%;font-family:inherit;font-size:12px;padding:7px 8px;border:1px solid var(--line);border-radius:2px;background:#fff;margin-bottom:8px;">
+      <select id="platePreset" style="width:100%;margin-bottom:8px;" aria-label="Figure preset">
         <option value="custom">Custom (current layers)</option>
         <option value="bv">Biodiversity Values Map</option>
         <option value="svtm">Vegetation (SVTM)</option>
         <option value="location">Location context (IBRA / Mitchell Landscapes)</option>
         <option value="water">Watercourses (Strahler stream order)</option>
       </select>
-      <input type="text" id="figureTitle" placeholder="Figure 2.2: Alternative layout" style="width:100%;font-family:inherit;font-size:12px;padding:7px 8px;border:1px solid var(--line);border-radius:2px;margin-bottom:8px;">
+      <input type="text" id="figureTitle" placeholder="Figure 2.2: Alternative layout" aria-label="Figure title" style="width:100%;margin-bottom:8px;">
       <button class="primary" id="composeFigure">Compose figure</button>
     </section>
 
@@ -897,18 +1126,18 @@
   <div id="chatPanel">
     <div id="chatPanelHeader">
       <h2>Ask about this site</h2>
-      <button id="chatPanelClose" title="Close">&times;</button>
+      <button id="chatPanelClose" title="Close" aria-label="Close">&times;</button>
     </div>
     <div id="chatPanelBody">
       <p class="chat-hint">Grounded only in the layers queried above, clipped to the assessment buffer — no outside knowledge, no guessing beyond that data.</p>
       <div id="chatMessages"></div>
     </div>
     <div id="chatPanelFooter">
-      <div style="display:flex;gap:6px;">
-        <input type="text" id="chatInput" placeholder="e.g. Which PCTs are mapped on site?" style="flex:1;font-family:inherit;font-size:12px;padding:7px 9px;border:1px solid var(--line);border-radius:2px;background:#fff;">
-        <button class="secondary" id="chatSend" style="width:auto;padding:7px 12px;">Send</button>
+      <div class="chat-compose">
+        <input type="text" id="chatInput" placeholder="e.g. Which PCTs are mapped on site?" aria-label="Ask a question">
+        <button class="secondary" id="chatSend">Send</button>
       </div>
-      <div id="chatStatus" style="margin-top:6px;font-size:12px;"></div>
+      <div id="chatStatus"></div>
     </div>
   </div>
 </div>
