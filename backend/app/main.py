@@ -16,6 +16,7 @@ import io
 import zipfile
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from . import jobs, planner
@@ -32,6 +33,21 @@ app = FastAPI(
     title="GroundPatch AI GIS backend",
     description="Phase 1: real PyQGIS execution of approved GIS operations. See backend/README.md.",
     version="0.1.0-phase1",
+)
+
+# index.html runs in a browser on a different origin than this API (a local
+# file, a dev server, or wherever it's deployed) - without CORS headers the
+# browser blocks every fetch() call before it even reaches these routes,
+# independent of anything the request itself does right. Wide open
+# (allow_origins=["*"]) because this is a local/experimental dev tool with
+# no auth and no cookies to protect yet (see README.md Phase 4) - restrict
+# this to the real deployed GroundPatch origin(s) before this backend is
+# ever reachable from the public internet.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
