@@ -450,11 +450,6 @@
   .badge.hit{ background:var(--moss-soft); color:var(--moss); }
   .badge.miss{ background:var(--paper); color:var(--ink-soft); }
   .badge.err{ background:#F8E6E6; color:var(--red); }
-  .badge.warn{ background:#faecd0; color:#8a5a00; }
-  .dc-row{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
-  .dc-row:last-child{ border-bottom:none; }
-  .dc-row .dc-name{ flex:1; }
-  .dc-row .dc-meta{ color:var(--ink-soft); font-size:11px; }
 
   /* ---------- Chat — floating panel docked to the right of the map ---------- */
   #chatToggleBtn{
@@ -1016,11 +1011,6 @@
     <section id="resultsSection" style="display:none;">
       <h2>Layer results</h2>
       <div id="results"></div>
-    </section>
-
-    <section id="dataCompletenessSection" style="display:none;">
-      <h2>Data completeness</h2>
-      <div id="dataCompletenessPanel" style="font-size:12px;"></div>
     </section>
 
     <section id="exportSection" style="display:none;">
@@ -3096,7 +3086,7 @@ function wireRetryButton(card, lyr){
   btn.addEventListener('click', ()=>{
     card.className = 'result-card';
     card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge" style="margin-left:auto;">retrying…</span></div>`;
-    processLayer(lyr, card).then(()=>{ renderDataCompletenessPanel(); updateMapLegend(); });
+    processLayer(lyr, card).then(()=> updateMapLegend());
   });
 }
 
@@ -3281,37 +3271,6 @@ async function processLayer(lyr, card){
   }
 }
 
-function statusBadgeHtml(status){
-  if(status === 'complete') return '<span class="badge hit">complete</span>';
-  if(status === 'partial') return '<span class="badge warn">partial</span>';
-  if(status === 'failed') return '<span class="badge err">failed</span>';
-  return '<span class="badge miss">not queried</span>';
-}
-
-// Every active/conditional layer's last attempt in one place - status,
-// when it was last (re)fetched, and where it came from - rather than
-// having to scan every result card individually. Also the one place that
-// still shows a layer which was retried on its own (its timestamp/status
-// update independently of the rest of the run that way).
-function renderDataCompletenessPanel(){
-  const section = document.getElementById('dataCompletenessSection');
-  const panel = document.getElementById('dataCompletenessPanel');
-  const relevant = layers.filter(l => l.on || l.conditional || l.queryStatus);
-  if(!relevant.length){ section.style.display = 'none'; return; }
-  section.style.display = 'block';
-  panel.innerHTML = relevant.map(lyr=>{
-    const status = lyr.queryStatus || 'not queried';
-    const when = lyr.retrievedAt ? new Date(lyr.retrievedAt).toLocaleString() : '—';
-    const sourceUrl = lyr.url || (lyr.derived ? `(derived from ${lyr.sourceLayer})` : '—');
-    return `<div class="dc-row">
-      <span class="dc-name">${lyr.name}</span>
-      ${statusBadgeHtml(status)}
-      <span class="dc-meta">${when}</span>
-    </div>
-    <div class="dc-meta" style="padding:0 0 6px;word-break:break-all;">${sourceUrl}</div>`;
-  }).join('');
-}
-
 async function runAll(){
   if(!boundaryGeom) return;
   // Conditional layers (e.g. Soil Landscapes) are tested every run regardless of
@@ -3425,8 +3384,6 @@ async function runAll(){
   // report/Excel export, not duplicated live in the UI) - kept as plain
   // text for report.txt in the exported assessment package.
   lastReportText = reportLines.join('\n');
-
-  renderDataCompletenessPanel();
 
   renderLayerList();
   renderExportList();
