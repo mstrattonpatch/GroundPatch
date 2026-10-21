@@ -1075,59 +1075,17 @@
 
     <section id="aiGisSection" style="display:none;">
       <h2>AI GIS analysis (experimental)</h2>
-      <p class="section-note">Runs real spatial operations (buffer, clip, intersect, dissolve, area, distance) against a separate backend — see /backend in the repo. Requires that service running and reachable from this browser.</p>
+      <p class="section-note">Talk through the spatial analysis you need — buffers, overlays, reclassifying values against a table, consolidating layers — against a separate backend (see /backend in the repo). Requires that service running and reachable from this browser.</p>
       <label for="aiGisBackendUrl" style="display:block;font-size:12px;margin-bottom:4px;">Backend URL</label>
       <input type="text" id="aiGisBackendUrl" placeholder="http://localhost:8000" style="width:100%;margin-bottom:10px;">
 
-      <label for="aiGisTool" style="display:block;font-size:12px;margin-bottom:4px;">Operation</label>
-      <select id="aiGisTool" style="width:100%;margin-bottom:8px;"></select>
-
-      <label for="aiGisInput" style="display:block;font-size:12px;margin-bottom:4px;">Input layer</label>
-      <select id="aiGisInput" style="width:100%;margin-bottom:8px;"></select>
-
-      <div id="aiGisOverlayRow">
-        <label for="aiGisOverlay" style="display:block;font-size:12px;margin-bottom:4px;">Overlay layer</label>
-        <select id="aiGisOverlay" style="width:100%;margin-bottom:8px;"></select>
-      </div>
-
-      <div id="aiGisBufferRow" style="display:flex;gap:8px;">
-        <div style="flex:1;">
-          <label for="aiGisDistance" style="display:block;font-size:12px;margin-bottom:4px;">Distance</label>
-          <input type="number" id="aiGisDistance" value="500" style="width:100%;margin-bottom:8px;">
-        </div>
-        <div style="flex:1;">
-          <label for="aiGisBufferUnits" style="display:block;font-size:12px;margin-bottom:4px;">Units</label>
-          <select id="aiGisBufferUnits" style="width:100%;margin-bottom:8px;">
-            <option value="metres">metres</option>
-            <option value="kilometres">kilometres</option>
-          </select>
-        </div>
-      </div>
-
-      <div id="aiGisAreaRow">
-        <label for="aiGisAreaUnits" style="display:block;font-size:12px;margin-bottom:4px;">Area units</label>
-        <select id="aiGisAreaUnits" style="width:100%;margin-bottom:8px;">
-          <option value="hectares">hectares</option>
-          <option value="square_metres">square metres</option>
-        </select>
-      </div>
-
-      <div id="aiGisDissolveRow">
-        <label for="aiGisDissolveField" style="display:block;font-size:12px;margin-bottom:4px;">Dissolve field (optional)</label>
-        <input type="text" id="aiGisDissolveField" placeholder="leave blank to dissolve the whole layer" style="width:100%;margin-bottom:8px;">
-      </div>
-
-      <label for="aiGisOutput" style="display:block;font-size:12px;margin-bottom:4px;">Output name</label>
-      <input type="text" id="aiGisOutput" placeholder="e.g. buf500" style="width:100%;margin-bottom:8px;">
-
-      <button class="secondary" id="aiGisAddOperation" style="width:100%;">Add operation to plan</button>
-
-      <div id="aiGisPlanList" style="margin-top:10px;font-size:12px;"></div>
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button class="primary" id="aiGisRunPlan" style="flex:1;" disabled>Run analysis</button>
-        <button class="textbtn" id="aiGisClearPlan" style="margin:0;">Clear plan</button>
+      <div id="aiGisChatMessages" style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--panel);display:flex;flex-direction:column;gap:8px;"></div>
+      <div style="display:flex;gap:6px;">
+        <input type="text" id="aiGisChatInput" placeholder="e.g. Buffer the site by 500m and intersect with the SVTM layer" aria-label="Describe the analysis you need" style="flex:1;">
+        <button class="secondary" id="aiGisChatSend">Send</button>
       </div>
       <div id="aiGisStatus" style="font-size:12px;margin-top:8px;"></div>
+      <button class="textbtn" id="aiGisClearChat" style="margin-top:2px;">Clear conversation</button>
       <div id="aiGisResults" style="margin-top:10px;"></div>
     </section>
 
@@ -3714,10 +3672,7 @@ function renderExportList(){
   document.getElementById('koalaSightingsSection').style.display = 'block';
   document.getElementById('koalaFetchStatus').textContent = '';
 
-  // The AI GIS plan's layer pickers (site boundary + whatever's just been
-  // queried) need rebuilding against the new site too.
   document.getElementById('aiGisSection').style.display = 'block';
-  refreshAiGisLayerOptions();
 
   const boundaryRow = document.createElement('div');
   boundaryRow.className = 'export-row';
@@ -6503,31 +6458,19 @@ function exitFigureMode(){
 }
 
 /* =========================================================
-   AI GIS analysis (experimental) — talks to the separate /backend
-   service (see backend/README.md): builds a plan of approved
-   operations (buffer/clip/intersection/difference/dissolve/
-   calculate_area/calculate_distance), sends it plus the real feature
-   data for every referenced layer, and renders whatever comes back on
-   the map like any other layer. Phase 1 of that backend is real
-   (actual PyQGIS execution) but /api/ai/plan (natural-language ->
-   plan) is still a stub, so this builds the plan directly via a
-   structured form rather than pretending a chat box would do anything
-   useful right now.
+   AI GIS analysis (experimental) — a real conversation with the
+   separate /backend service's /api/chat endpoint (see
+   backend/README.md and planner.chat_turn()). The model there can
+   either just reply (ask a clarifying question, flag something odd in
+   the data) or propose a plan of approved operations
+   (buffer/clip/intersection/difference/dissolve/calculate_area/
+   calculate_distance/reclassify/merge_with_precedence/
+   filter_by_attribute), which the backend validates and executes in
+   the same call — this UI never builds or restricts the plan itself,
+   it just has the conversation and renders whatever layers come back.
 ========================================================= */
-const AI_GIS_TOOL_CONFIG = {
-  buffer:              { label: 'Buffer',              overlay: false, buffer: true,  area: false, dissolve: false },
-  clip:                { label: 'Clip',                 overlay: true,  buffer: false, area: false, dissolve: false },
-  intersection:        { label: 'Intersection',          overlay: true,  buffer: false, area: false, dissolve: false },
-  difference:          { label: 'Difference',             overlay: true,  buffer: false, area: false, dissolve: false },
-  dissolve:            { label: 'Dissolve',                overlay: false, buffer: false, area: false, dissolve: true },
-  calculate_area:      { label: 'Calculate area',           overlay: false, buffer: false, area: true,  dissolve: false },
-  calculate_distance:  { label: 'Calculate distance',        overlay: true,  buffer: false, area: false, dissolve: false },
-};
-
-let aiGisPlan = [];               // operations, in the exact shape the backend's Operation model expects
+let aiGisChatHistory = [];        // [{role, content}] - full history resent each turn, same pattern as the existing "Ask about this site" chat
 let aiGisResultLayers = {};       // layer_id -> { geojson, mapLayerGroup, name }
-let aiGisLastJobId = null;
-let aiGisLastBackendUrl = null;
 
 // Same slugging pattern already used for export filenames elsewhere
 // (geojsonToCSV/exportShapefile callers) - reused here so a layer's AI-GIS
@@ -6536,113 +6479,45 @@ function aiGisSlug(name){
   return name.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
 }
 
-function populateAiGisToolSelect(){
-  const sel = document.getElementById('aiGisTool');
-  sel.innerHTML = Object.entries(AI_GIS_TOOL_CONFIG).map(([tool, cfg]) => `<option value="${tool}">${cfg.label}</option>`).join('');
-  sel.addEventListener('change', updateAiGisParamVisibility);
-  updateAiGisParamVisibility();
-}
-
-function updateAiGisParamVisibility(){
-  const tool = document.getElementById('aiGisTool').value;
-  const cfg = AI_GIS_TOOL_CONFIG[tool] || {};
-  document.getElementById('aiGisOverlayRow').style.display = cfg.overlay ? '' : 'none';
-  document.getElementById('aiGisBufferRow').style.display = cfg.buffer ? 'flex' : 'none';
-  document.getElementById('aiGisAreaRow').style.display = cfg.area ? '' : 'none';
-  document.getElementById('aiGisDissolveRow').style.display = cfg.dissolve ? '' : 'none';
-}
-
-// Rebuilds the input/overlay layer pickers: the site boundary, every
-// currently-queried layer with real results, and every operation already
-// queued in aiGisPlan (so a later step can reference an earlier one's
-// output - this is how chaining works in the UI, matching how jobs.py
-// chains them server-side).
-function refreshAiGisLayerOptions(){
-  const options = [{ id:'subject_site', label:'Site boundary' }];
-  layers.filter(l => l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).forEach(l=>{
-    options.push({ id: aiGisSlug(l.name), label: l.name });
-  });
-  aiGisPlan.forEach(op=>{
-    if(op.output) options.push({ id: op.output, label: `${op.output} (from plan)` });
-  });
-
-  const html = options.map(o => `<option value="${escHtml(o.id)}">${escHtml(o.label)}</option>`).join('');
-  const inputSel = document.getElementById('aiGisInput');
-  const overlaySel = document.getElementById('aiGisOverlay');
-  const prevInput = inputSel.value, prevOverlay = overlaySel.value;
-  inputSel.innerHTML = html;
-  overlaySel.innerHTML = html;
-  if(options.some(o=>o.id===prevInput)) inputSel.value = prevInput;
-  if(options.some(o=>o.id===prevOverlay)) overlaySel.value = prevOverlay;
-}
-
-populateAiGisToolSelect();
-
-document.getElementById('aiGisAddOperation').addEventListener('click', ()=>{
-  const tool = document.getElementById('aiGisTool').value;
-  const cfg = AI_GIS_TOOL_CONFIG[tool];
-  const input = document.getElementById('aiGisInput').value;
-  if(!input){ alert('Pick an input layer first — run "Fetch site data" or another query so at least one layer has results.'); return; }
-
-  const op = { tool, input };
-  if(cfg.overlay){
-    const overlay = document.getElementById('aiGisOverlay').value;
-    if(!overlay){ alert('This operation needs an overlay layer.'); return; }
-    op.overlay = overlay;
-  }
-  if(cfg.buffer){
-    op.distance = Number(document.getElementById('aiGisDistance').value);
-    op.units = document.getElementById('aiGisBufferUnits').value;
-    if(!op.distance || op.distance <= 0){ alert('Enter a positive buffer distance.'); return; }
-  }
-  if(cfg.area){
-    op.units = document.getElementById('aiGisAreaUnits').value;
-  }
-  if(cfg.dissolve){
-    const field = document.getElementById('aiGisDissolveField').value.trim();
-    if(field) op.params = { field };
-  }
-  const outputName = document.getElementById('aiGisOutput').value.trim();
-  op.output = outputName || `${tool}_${aiGisPlan.length + 1}`;
-
-  aiGisPlan.push(op);
-  document.getElementById('aiGisOutput').value = '';
-  renderAiGisPlanList();
-  refreshAiGisLayerOptions();
-  document.getElementById('aiGisRunPlan').disabled = aiGisPlan.length === 0;
-});
-
-function renderAiGisPlanList(){
-  const el = document.getElementById('aiGisPlanList');
-  if(!aiGisPlan.length){ el.innerHTML = ''; return; }
-  el.innerHTML = aiGisPlan.map((op, i)=>{
-    const parts = [`<b>${i+1}.</b> ${escHtml(AI_GIS_TOOL_CONFIG[op.tool].label)} — ${escHtml(op.input)}`];
-    if(op.overlay) parts.push(`+ ${escHtml(op.overlay)}`);
-    if(op.distance != null) parts.push(`(${op.distance} ${op.units})`);
-    if(op.tool === 'calculate_area') parts.push(`(${op.units})`);
-    parts.push(`&rarr; <code>${escHtml(op.output)}</code>`);
-    return `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--line);">
-      <span style="flex:1;">${parts.join(' ')}</span>
-      <button class="textbtn" style="margin:0;" data-remove-op="${i}">Remove</button>
-    </div>`;
-  }).join('');
-  el.querySelectorAll('[data-remove-op]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      aiGisPlan.splice(Number(btn.dataset.removeOp), 1);
-      renderAiGisPlanList();
-      refreshAiGisLayerOptions();
-      document.getElementById('aiGisRunPlan').disabled = aiGisPlan.length === 0;
+// Up to ~15 distinct values per field, sampled from the first 200
+// features - the model needs real attribute content (PCT codes,
+// condition classes, ...) to build a correct reclassify mapping or
+// filter value, not just a field name. Capped on both features scanned
+// and values kept so this stays fast and the chat payload stays small
+// even for a layer with thousands of features.
+function aiGisSampleValues(geojson){
+  const samples = {};
+  const features = geojson.features || [];
+  const scanLimit = Math.min(features.length, 200);
+  for(let i=0;i<scanLimit;i++){
+    const props = features[i].properties || {};
+    Object.entries(props).forEach(([k,v])=>{
+      if(v == null) return;
+      if(!samples[k]) samples[k] = new Set();
+      if(samples[k].size < 15) samples[k].add(String(v));
     });
-  });
+  }
+  const out = {};
+  Object.entries(samples).forEach(([k,set])=> out[k] = Array.from(set));
+  return out;
 }
 
-document.getElementById('aiGisClearPlan').addEventListener('click', ()=>{
-  aiGisPlan = [];
-  renderAiGisPlanList();
-  refreshAiGisLayerOptions();
-  document.getElementById('aiGisRunPlan').disabled = true;
-  document.getElementById('aiGisStatus').textContent = '';
-});
+function buildAiGisSiteContext(){
+  return {
+    boundary: boundaryGeom,
+    assessment_buffer_km: ASSESSMENT_BUFFER_KM,
+    context_buffer_km: CONTEXT_BUFFER_KM,
+    layers: layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).map(l=>({
+      id: aiGisSlug(l.name),
+      name: l.name,
+      geometry_type: (l.lastGeoJSON.features[0].geometry || {}).type === 'MultiPolygon' ? 'Polygon' : (l.lastGeoJSON.features[0].geometry || {}).type,
+      fields: Object.keys(l.lastGeoJSON.features[0].properties || {}),
+      status: l.queryStatus || 'not_queried',
+      retrieved_at: l.retrievedAt || null,
+      sample_values: aiGisSampleValues(l.lastGeoJSON),
+    })),
+  };
+}
 
 // Loads/saves the backend URL field from localStorage - a per-browser
 // convenience (this is a local dev tool, not something that belongs in
@@ -6653,73 +6528,68 @@ aiGisUrlInput.addEventListener('change', ()=>{
   try{ localStorage.setItem('groundpatch_ai_gis_backend_url', aiGisUrlInput.value.trim()); }catch(e){}
 });
 
-document.getElementById('aiGisRunPlan').addEventListener('click', async ()=>{
+function renderAiGisChatMessages(){
+  const el = document.getElementById('aiGisChatMessages');
+  el.innerHTML = aiGisChatHistory.map(m=>`
+    <div class="chat-msg chat-${m.role}">
+      <b>${m.role === 'user' ? 'You' : 'AI GIS'}</b>
+      <div>${xmlEscape(m.content).replace(/\n/g,'<br>')}</div>
+    </div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+document.getElementById('aiGisClearChat').addEventListener('click', ()=>{
+  aiGisChatHistory = [];
+  renderAiGisChatMessages();
+  document.getElementById('aiGisStatus').textContent = '';
+});
+
+async function sendAiGisChatMessage(){
   if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
-  if(!aiGisPlan.length) return;
-  const btn = document.getElementById('aiGisRunPlan');
-  const statusEl = document.getElementById('aiGisStatus');
+  const input = document.getElementById('aiGisChatInput');
+  const text = input.value.trim();
+  if(!text) return;
   const backendUrl = aiGisUrlInput.value.trim().replace(/\/+$/, '');
   if(!backendUrl){ alert('Enter the backend URL first.'); return; }
 
+  aiGisChatHistory.push({ role:'user', content:text });
+  input.value = '';
+  renderAiGisChatMessages();
+  const btn = document.getElementById('aiGisChatSend');
+  const statusEl = document.getElementById('aiGisStatus');
   btn.disabled = true;
-  statusEl.textContent = 'Running…';
-  document.getElementById('aiGisResults').innerHTML = '';
+  statusEl.textContent = 'Thinking…';
 
   try{
-    const siteContext = {
-      boundary: boundaryGeom,
-      assessment_buffer_km: ASSESSMENT_BUFFER_KM,
-      context_buffer_km: CONTEXT_BUFFER_KM,
-      layers: layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).map(l=>({
-        id: aiGisSlug(l.name),
-        name: l.name,
-        geometry_type: (l.lastGeoJSON.features[0].geometry || {}).type === 'MultiPolygon' ? 'Polygon' : (l.lastGeoJSON.features[0].geometry || {}).type,
-        fields: Object.keys(l.lastGeoJSON.features[0].properties || {}),
-        status: l.queryStatus || 'not_queried',
-        retrieved_at: l.retrievedAt || null,
-      })),
-    };
-
-    // Only real source layers need their features sent - anything that's
-    // an earlier operation's own output is produced server-side, not
-    // something the browser has to supply.
-    const producedIds = new Set(aiGisPlan.map(op => op.output).filter(Boolean));
-    const neededIds = new Set();
-    aiGisPlan.forEach(op=>{
-      if(op.input !== 'subject_site' && !producedIds.has(op.input)) neededIds.add(op.input);
-      if(op.overlay && op.overlay !== 'subject_site' && !producedIds.has(op.overlay)) neededIds.add(op.overlay);
-    });
+    const siteContext = buildAiGisSiteContext();
     const layerData = {};
-    neededIds.forEach(id=>{
-      const lyr = layers.find(l => aiGisSlug(l.name) === id);
-      if(lyr && lyr.lastGeoJSON) layerData[id] = lyr.lastGeoJSON;
+    layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).forEach(l=>{
+      layerData[aiGisSlug(l.name)] = l.lastGeoJSON;
     });
 
-    const jobResp = await fetch(`${backendUrl}/api/jobs`, {
+    const resp = await fetch(`${backendUrl}/api/chat`, {
       method:'POST', headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ plan:{ operations: aiGisPlan }, site_context: siteContext, layer_data: layerData }),
+      body: JSON.stringify({ messages: aiGisChatHistory, site_context: siteContext, layer_data: layerData }),
     });
-    if(!jobResp.ok) throw new Error(`HTTP ${jobResp.status} from ${backendUrl}/api/jobs`);
-    const job = await jobResp.json();
+    if(!resp.ok) throw new Error(`HTTP ${resp.status} from ${backendUrl}/api/chat`);
+    const data = await resp.json();
 
-    if(job.state !== 'done'){
-      statusEl.innerHTML = `<span class="err">Job ${job.state}${job.errors && job.errors.length ? ': ' + job.errors.map(escHtml).join('; ') : ''}</span>`;
-      return;
+    aiGisChatHistory.push({ role:'assistant', content:data.reply });
+    renderAiGisChatMessages();
+    statusEl.textContent = data.mock ? 'No AI configured on the backend yet (see its reply above).' : '';
+
+    if(data.job && data.job.state === 'done' && data.results){
+      await renderAiGisResults(data.results.output_layers, backendUrl, data.job.job_id);
     }
-
-    const resultsResp = await fetch(`${backendUrl}/api/jobs/${job.job_id}/results`);
-    if(!resultsResp.ok) throw new Error(`HTTP ${resultsResp.status} fetching job results`);
-    const results = await resultsResp.json();
-
-    aiGisLastJobId = job.job_id;
-    aiGisLastBackendUrl = backendUrl;
-    statusEl.innerHTML = `<span class="ok">Done — ${results.output_layers.length} output layer${results.output_layers.length===1?'':'s'}.</span>`;
-    await renderAiGisResults(results.output_layers, backendUrl, job.job_id);
   }catch(err){
     statusEl.innerHTML = `<span class="err">${escHtml(err.message)} — is the backend running and reachable at this URL (and CORS-enabled for this origin)?</span>`;
   }finally{
     btn.disabled = false;
   }
+}
+document.getElementById('aiGisChatSend').addEventListener('click', sendAiGisChatMessage);
+document.getElementById('aiGisChatInput').addEventListener('keydown', e=>{
+  if(e.key === 'Enter') sendAiGisChatMessage();
 });
 
 async function renderAiGisResults(outputLayers, backendUrl, jobId){
