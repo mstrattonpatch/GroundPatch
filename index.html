@@ -455,24 +455,6 @@
   .dc-row:last-child{ border-bottom:none; }
   .dc-row .dc-name{ flex:1; }
   .dc-row .dc-meta{ color:var(--ink-soft); font-size:11px; }
-  .cs-row{ display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--line); }
-  .cs-row:last-child{ border-bottom:none; }
-  .cs-row .cs-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .cs-row .cs-ha{ font-variant-numeric:tabular-nums; color:var(--ink-soft); min-width:80px; text-align:right; }
-  .cs-row .cs-pct{ font-variant-numeric:tabular-nums; font-weight:600; min-width:50px; text-align:right; }
-
-  #reportBox{
-    white-space:pre-wrap;
-    font-family:'IBM Plex Mono', monospace;
-    font-size:11.5px;
-    line-height:1.65;
-    background:var(--paper);
-    border:1px solid var(--line);
-    border-radius:var(--radius);
-    padding:14px;
-    max-height:280px;
-    overflow-y:auto;
-  }
 
   /* ---------- Chat — floating panel docked to the right of the map ---------- */
   #chatToggleBtn{
@@ -941,7 +923,6 @@
       <span class="brand-chip">Prototype</span>
     </div>
     <p class="tagline">Site Constraints Mapper</p>
-    <p>Upload a project boundary, query live NSW ecology spatial layers against it, and get a site summary. Add your own hosted layers below.</p>
   </header>
 
   <div id="resumeBanner" style="display:none;"></div>
@@ -998,7 +979,6 @@
         <input type="range" id="cadastreBufferSlider" min="100" max="2000" step="50" value="500" aria-label="Cadastre search radius">
         <span id="cadastreBufferLabel">500 m</span>
       </div>
-      <p class="hint">How far beyond the site boundary to pull neighbouring lots (up to 2km). Updates the preview circle immediately — click "Fetch site data" to (re)download cadastre at this radius.</p>
     </section>
 
     <section>
@@ -1043,18 +1023,6 @@
       <div id="dataCompletenessPanel" style="font-size:12px;"></div>
     </section>
 
-    <section id="constraintsStatsSection" style="display:none;">
-      <h2>Constraints area summary</h2>
-      <button class="secondary" id="calcConstraintsStats">Calculate area statistics</button>
-      <div id="constraintsStatsPanel" style="margin-top:10px;font-size:12px;"></div>
-    </section>
-
-    <section id="reportSection" style="display:none;">
-      <h2>Summary report</h2>
-      <div id="reportBox"></div>
-      <button class="secondary" id="copyReport">Copy report text</button>
-    </section>
-
     <section id="exportSection" style="display:none;">
       <h2>Export data</h2>
       <button class="primary" id="downloadAllZip">Export assessment package (.zip)</button>
@@ -1071,7 +1039,7 @@
 
     <section id="threatenedSpeciesSection" style="display:none;">
       <h2>Threatened species (BioNet)</h2>
-      <p class="section-note">Live query against BioNet's ThreatenedBiodiversity_Species dataset, cross-referenced against the PCTs (and IBRA subregion) found on the subject site — fetched fresh every time, never bundled or cached data.</p>
+      <p class="section-note">Live query against BioNet's ThreatenedBiodiversity_Species dataset, cross-referenced against the PCTs (and IBRA subregion) found on the subject site.</p>
       <button class="secondary" id="fetchThreatenedSpecies" style="margin-top:0;">Fetch threatened species list</button>
       <div id="tsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
       <div id="threatenedSpeciesResult" style="margin-top:8px;"></div>
@@ -1079,7 +1047,7 @@
 
     <section id="speciesSightingsSection" style="display:none;">
       <h2>Species sightings (BioNet Atlas)</h2>
-      <p class="section-note">Live query against BioNet Atlas's Species Sightings records within the assessment buffer — the same records the department's own Atlas Search finds — fetched fresh every time. Also fills the Atlas Count columns in the threatened species export above, if that's been run this session.</p>
+      <p class="section-note">Live query against BioNet Atlas's Species Sightings records within the assessment buffer.</p>
       <button class="secondary" id="fetchSpeciesSightings" style="margin-top:0;">Fetch species sightings</button>
       <div id="sightingsFetchStatus" style="font-size:12px;margin-top:6px;"></div>
       <div id="speciesSightingsResult" style="margin-top:8px;"></div>
@@ -1087,7 +1055,7 @@
 
     <section id="koalaSightingsSection" style="display:none;">
       <h2>Koala sightings</h2>
-      <p class="section-note">Live query against the Koala Species Sightings layer within the assessment buffer, fetched independently of the main "Fetch site data" run.</p>
+      <p class="section-note">Live query against the Koala Species Sightings layer.</p>
       <button class="secondary" id="fetchKoalaSightings" style="margin-top:0;">Fetch koala sightings</button>
       <div id="koalaFetchStatus" style="font-size:12px;margin-top:6px;"></div>
     </section>
@@ -1293,6 +1261,10 @@ let assessmentGeom = null; // 5km rounded buffer — used for querying/clipping 
 let assessmentLayer = null;
 let contextGeom = null;    // rounded buffer for context-only layers (e.g. cadastre) — adjustable via the sidebar slider, up to 2km
 let contextLayer = null;
+// Plain text of the last run's summary report — no longer shown on screen,
+// kept only so the exported assessment package's report.txt has something
+// to write (see buildPackageReadme()/downloadAllZip's handler).
+let lastReportText = '';
 // Both mutable (not const) — user-adjustable via their own sliders:
 // ASSESSMENT_BUFFER_KM via wireAssessmentBufferSlider() below, CONTEXT_BUFFER_KM
 // via the cadastre radius slider.
@@ -3448,12 +3420,12 @@ async function runAll(){
     <div class="stat"><span>Layers queried</span><span>${active.length}</span></div>
   `;
 
-  document.getElementById('reportSection').style.display = 'block';
-  document.getElementById('reportBox').textContent = reportLines.join('\n');
+  // No longer shown on screen (the detail belongs in the generated
+  // report/Excel export, not duplicated live in the UI) - kept as plain
+  // text for report.txt in the exported assessment package.
+  lastReportText = reportLines.join('\n');
 
   renderDataCompletenessPanel();
-  document.getElementById('constraintsStatsSection').style.display = 'block';
-  document.getElementById('constraintsStatsPanel').innerHTML = '';
 
   renderLayerList();
   renderExportList();
@@ -3476,14 +3448,6 @@ async function runAll(){
     saveSession();
   }
 }
-
-document.getElementById('copyReport').addEventListener('click', ()=>{
-  navigator.clipboard.writeText(document.getElementById('reportBox').textContent);
-  const btn = document.getElementById('copyReport');
-  const old = btn.textContent;
-  btn.textContent = 'Copied';
-  setTimeout(()=> btn.textContent = old, 1200);
-});
 
 /* =========================================================
    Chat — grounded strictly in the layers that were actually queried
@@ -3995,15 +3959,14 @@ function safeDifference(a, b){
 }
 
 /* =========================================================
-   Constraints area statistics — automatic, read-only area/percentage
-   breakdown of every queried polygon layer against the subject site,
-   independent of the manual High/Medium/Low tool above (which requires
-   assigning each class to a tier by hand). Reuses the same clip/group
-   helpers as that tool so the two stay numerically consistent with
-   each other.
+   Constraints area statistics — automatic area/percentage breakdown of
+   every queried polygon layer against the subject site, independent of
+   the manual High/Medium/Low tool above (which requires assigning each
+   class to a tier by hand). Reuses the same clip/group helpers as that
+   tool so the two stay numerically consistent with each other. Feeds a
+   sheet in the Export report (.xlsx) output rather than a live on-screen
+   panel — see the "Constraints area summary" sheet in exportReportXlsx.
 ========================================================= */
-let constraintsStatsRows = [];
-
 function computeConstraintsStatistics(){
   const options = getConstraintLayerOptions(); // already clips to boundaryGeom, excludes context-only layers
   const siteHa = polygonAreaHa(boundaryGeom);
@@ -4048,59 +4011,6 @@ function computeConstraintsStatistics(){
 
   return { siteHa, rows, remainingHa, bufferTotals };
 }
-
-function renderConstraintsStatsPanel(){
-  const panel = document.getElementById('constraintsStatsPanel');
-  if(!boundaryGeom){ panel.innerHTML = '<div class="cs-row">Load a site boundary first.</div>'; return; }
-
-  const { siteHa, rows, remainingHa, bufferTotals } = computeConstraintsStatistics();
-  constraintsStatsRows = rows;
-
-  if(!rows.length){
-    panel.innerHTML = '<div class="cs-row">None of the queried polygon layers intersect the subject site — nothing to summarise yet.</div>';
-    return;
-  }
-
-  const siteRowsHtml = rows.map((r, i)=> `
-    <div class="cs-row">
-      <span class="cs-label" title="${xmlEscape(r.layerName)} — ${xmlEscape(r.label)}">${xmlEscape(r.layerName)} — ${xmlEscape(r.label)}</span>
-      <span class="cs-ha">${r.areaHa.toFixed(2)} ha</span>
-      <span class="cs-pct">${(r.areaHa / siteHa * 100).toFixed(1)}%</span>
-      <button class="textbtn" style="margin:0;" data-zoom-stat="${i}">Zoom</button>
-    </div>`).join('');
-
-  const bufferHtml = bufferTotals.length ? `
-    <div style="margin-top:14px;font-weight:600;font-size:12px;">Within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (not clipped to the site)</div>
-    ${bufferTotals.map(b=> `
-      <div class="cs-row">
-        <span class="cs-label">${xmlEscape(b.layerName)}</span>
-        <span class="cs-ha">${b.areaHa.toFixed(2)} ha</span>
-      </div>`).join('')}` : '';
-
-  panel.innerHTML = `
-    <div style="font-weight:600;font-size:12px;margin-bottom:4px;">On the subject site (${siteHa.toFixed(2)} ha), largest first</div>
-    ${siteRowsHtml}
-    ${remainingHa != null ? `
-    <div class="cs-row" style="font-weight:600;">
-      <span class="cs-label">Remaining unconstrained area</span>
-      <span class="cs-ha">${remainingHa.toFixed(2)} ha</span>
-      <span class="cs-pct">${(remainingHa / siteHa * 100).toFixed(1)}%</span>
-    </div>` : ''}
-    ${bufferHtml}
-    <div style="color:var(--ink-soft);font-size:11px;margin-top:10px;">Rows under the same layer can overlap each other before dissolving — "Remaining unconstrained area" accounts for that overlap (it's the site minus the union of every row above, not the site minus their sum).</div>`;
-
-  panel.querySelectorAll('[data-zoom-stat]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const row = constraintsStatsRows[Number(btn.dataset.zoomStat)];
-      if(!row) return;
-      try{
-        const bounds = L.geoJSON({ type:'FeatureCollection', features: row.features }).getBounds();
-        map.flyToBounds(bounds, { maxZoom:17, padding:[40,40] });
-      }catch(e){}
-    });
-  });
-}
-document.getElementById('calcConstraintsStats').addEventListener('click', renderConstraintsStatsPanel);
 
 function generateBioConstraints(){
   if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
@@ -5936,7 +5846,7 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
       }
     }
 
-    const reportText = document.getElementById('reportBox').textContent;
+    const reportText = lastReportText;
     if(reportText) masterZip.file('report.txt', reportText);
     masterZip.file('README.txt', buildPackageReadme());
     masterZip.file('MANIFEST.txt', buildPackageManifest());
@@ -6419,7 +6329,42 @@ document.getElementById('exportReportXlsx').addEventListener('click', ()=>{
   ws1['!cols'] = [{wch:26},{wch:11},{wch:12},{wch:14},{wch:16},{wch:20},{wch:32}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Layer intersections');
 
-  // Sheet 2 — SVTM only: clip to the exact project area boundary (not the
+  // Sheet 2 — generic constraints area/percentage breakdown, automatic for
+  // every queried polygon layer that intersects the site (not just the
+  // named layers the later sheets cover individually), plus the dissolved
+  // (non-double-counted) remaining unconstrained area and simple per-layer
+  // totals within the wider assessment buffer. Used to live as a separate
+  // on-screen panel; moved here instead so it's part of the one generated
+  // report rather than duplicated live in the UI.
+  (function addConstraintsStatsSheet(){
+    if(!boundaryGeom) return;
+    const { rows, remainingHa, bufferTotals } = computeConstraintsStatistics();
+    if(!rows.length && remainingHa == null && !bufferTotals.length) return;
+    const csRows = [
+      ['CONSTRAINTS AREA SUMMARY'],
+      ['Project area (site)', siteHa.toFixed(4) + ' ha'],
+      [],
+      ['On the subject site, largest first'],
+      ['Layer', 'Class', 'Area (ha)', '% of site']
+    ];
+    rows.forEach(r=> csRows.push([r.layerName, r.label, +r.areaHa.toFixed(4), +((r.areaHa/siteHa)*100).toFixed(1)]));
+    if(remainingHa != null){
+      csRows.push(['Remaining unconstrained area', '', +remainingHa.toFixed(4), +((remainingHa/siteHa)*100).toFixed(1)]);
+    }
+    csRows.push([]);
+    csRows.push(['Note: rows above can overlap each other before dissolving - "Remaining unconstrained area" accounts for that overlap (site minus the union of every row, not minus their raw sum).']);
+    if(bufferTotals.length){
+      csRows.push([]);
+      csRows.push([`Within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (not clipped to the site)`]);
+      csRows.push(['Layer', '', 'Area (ha)']);
+      bufferTotals.forEach(b=> csRows.push([b.layerName, '', +b.areaHa.toFixed(4)]));
+    }
+    const wsCs = XLSX.utils.aoa_to_sheet(csRows);
+    wsCs['!cols'] = [{wch:30},{wch:22},{wch:14},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, wsCs, 'Constraints area summary');
+  })();
+
+  // Sheet 3 — SVTM only: clip to the exact project area boundary (not the
   // 5km buffer) and total area per PCT.
   const svtmLyr = layers.find(l => l.name === 'SVTM (Extant PCT)');
   if(svtmLyr && svtmLyr.lastGeoJSON && svtmLyr.lastGeoJSON.features.length){
@@ -6484,21 +6429,21 @@ document.getElementById('exportReportXlsx').addEventListener('click', ()=>{
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   }
 
-  // Sheet 3 — GDE Probability within the project area (site boundary)
+  // Sheet 4 — GDE Probability within the project area (site boundary)
   addCategoryAreaSheet(
     'GDE - area in site', 'GDE PROBABILITY — AREA WITHIN PROJECT AREA',
     layers.find(l=>l.name==='GDE Probability'), ['GDE_Probability', 'GW_DEPTH_C'],
     boundaryGeom, 'Project area (site)', siteHa
   );
 
-  // Sheet 4 — Biodiversity Values within the project area (site boundary)
+  // Sheet 5 — Biodiversity Values within the project area (site boundary)
   addCategoryAreaSheet(
     'BV Values - area in site', 'BIODIVERSITY VALUES — AREA WITHIN PROJECT AREA',
     layers.find(l=>l.name==='Biodiversity Values Map'), ['BV_Category', 'BOSET_Class'],
     boundaryGeom, 'Project area (site)', siteHa
   );
 
-  // Sheet 5 — Land Zoning within the project area (site boundary), keeping
+  // Sheet 6 — Land Zoning within the project area (site boundary), keeping
   // both SYM_CODE (short zone code) and LAY_CLASS (descriptive category) as
   // their own columns rather than picking just one.
   const zoningLyr = layers.find(l=>l.name==='Land Zoning');
@@ -6532,7 +6477,7 @@ document.getElementById('exportReportXlsx').addEventListener('click', ()=>{
     XLSX.utils.book_append_sheet(wb, wsZoning, 'Land Zoning - area in site');
   }
 
-  // Sheet 6 — Mitchell Landscapes within the 5km buffer. Mitchell already
+  // Sheet 7 — Mitchell Landscapes within the 5km buffer. Mitchell already
   // queries/clips to the 5km buffer by default, so no further clipping is
   // needed here — just total its area against the buffer's own extent.
   const bufferHa = polygonAreaHa(assessmentGeom);
