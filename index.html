@@ -576,10 +576,11 @@
   }
   .ai-layer-row:last-child{ border-bottom:none; }
   .ai-layer-row input[type=checkbox]{ width:15px; height:15px; flex:none; margin:0; cursor:pointer; }
-  .ai-layer-row input[type=color]{
-    width:18px; height:18px; flex:none; padding:0; border:1px solid rgba(0,0,0,.15); border-radius:4px;
-    cursor:pointer; background:none;
+  .ai-layer-row .ai-layer-swatch-btn{
+    width:16px; height:16px; flex:none; padding:0; border:1px solid rgba(0,0,0,.15); border-radius:4px;
+    cursor:pointer;
   }
+  .ai-layer-row .ai-layer-swatch-btn:hover{ border-color:var(--ink-faint); transform:scale(1.08); }
   .ai-layer-row .ai-layer-name{ flex:1; min-width:0; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ai-layer-row input.ai-layer-name-input{
     flex:1; min-width:0; font-size:12.5px; padding:4px 6px; border:1px solid transparent; background:transparent; border-radius:4px;
@@ -587,7 +588,6 @@
   .ai-layer-row input.ai-layer-name-input:hover, .ai-layer-row input.ai-layer-name-input:focus{
     border-color:var(--line-strong); background:var(--paper);
   }
-  .ai-layer-row input[type=range]{ width:44px; flex:none; }
   .ai-layer-row button.icon-btn{
     background:none; border:none; color:var(--ink-faint); cursor:pointer; font-size:13px; line-height:1;
     padding:4px; border-radius:5px; flex:none;
@@ -723,12 +723,12 @@
   }
 
   /* ---------- Modals (shared) ---------- */
-  #welcomeModal, #qgisScriptModal, #attrTableModal, #bioConstraintsModal{
+  #welcomeModal, #qgisScriptModal, #attrTableModal, #bioConstraintsModal, #aiSymbologyModal{
     position:fixed; inset:0; background:rgba(26,32,28,.5);
     backdrop-filter:blur(4px);
     align-items:center; justify-content:center; padding:20px;
   }
-  #welcomeCard, #qgisScriptCard, #attrTableCard, #bioConstraintsCard{
+  #welcomeCard, #qgisScriptCard, #attrTableCard, #bioConstraintsCard, #aiSymbologyCard{
     background:var(--panel); border:1px solid var(--line); border-radius:16px;
     box-shadow:var(--shadow-lg);
     animation:gp-rise .25s var(--ease);
@@ -819,6 +819,48 @@
   #attrTableWrap th .sort-arrow{ opacity:.5; margin-left:3px; }
   #attrTableWrap tr:hover td{ background:var(--moss-soft); }
   #attrTableWrap tr.at-clickable{ cursor:pointer; }
+
+  /* ---------- AI Analysis "Layer Properties — Symbology" modal ---------- */
+  #aiSymbologyModal{ z-index:3400; display:none; }
+  #aiSymbologyModal.show{ display:flex; }
+  #aiSymbologyCard{ max-width:420px; width:100%; padding:0; overflow:hidden; }
+  #aiSymbologyCard .sym-head{
+    display:flex; align-items:center; gap:10px; padding:16px 20px;
+    border-bottom:1px solid var(--line); background:var(--paper);
+  }
+  #aiSymbologyCard .sym-head h2{
+    font-family:var(--sans); font-size:12.5px; font-weight:600; margin:0; flex:1; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  #aiSymbologyCard .sym-close{
+    background:none; border:none; font-size:20px; line-height:1; cursor:pointer;
+    color:var(--ink-faint); flex:none; padding:2px 6px; border-radius:6px;
+  }
+  #aiSymbologyCard .sym-close:hover{ color:var(--ink); background:var(--line); }
+  #aiSymbologyCard .sym-body{ padding:20px; }
+  #aiSymbologyCard .sym-preview{
+    width:64px; height:64px; border:1px solid var(--line-strong); border-radius:6px; margin:0 auto 20px;
+  }
+  #aiSymbologyCard .sym-field{ margin-bottom:18px; }
+  #aiSymbologyCard .sym-field:last-child{ margin-bottom:0; }
+  #aiSymbologyCard .sym-field > span{
+    display:block; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--ink-soft); margin-bottom:8px;
+  }
+  #aiSymbologyCard input[type=color]{
+    width:100%; height:36px; padding:2px; border:1px solid var(--line-strong); border-radius:var(--radius-sm);
+    cursor:pointer; background:var(--panel);
+  }
+  #aiSymbologyCard .sym-opacity-row{ display:flex; align-items:center; gap:10px; }
+  #aiSymbologyCard .sym-opacity-row input[type=range]{ flex:1; }
+  #aiSymbologyCard .sym-opacity-row input[type=number]{
+    width:58px; font-size:12.5px; padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; text-align:right;
+  }
+  #aiSymbologyCard .sym-opacity-row span{ font-size:12.5px; color:var(--ink-soft); }
+  #aiSymbologyCard .sym-foot{
+    display:flex; gap:8px; justify-content:flex-end; padding:14px 20px; border-top:1px solid var(--line); background:var(--paper);
+  }
+  #aiSymbologyCard .sym-foot button{ margin:0; width:auto; padding:8px 16px; }
 
   /* ---------- Biodiversity constraints modal ---------- */
   #bioConstraintsModal{ z-index:3200; display:none; }
@@ -937,6 +979,35 @@
       <button class="at-close" id="closeAttrTable" title="Close" aria-label="Close">&times;</button>
     </div>
     <div id="attrTableWrap"></div>
+  </div>
+</div>
+
+<div id="aiSymbologyModal">
+  <div id="aiSymbologyCard">
+    <div class="sym-head">
+      <h2 id="aiSymbologyTitle">Layer Properties — Symbology</h2>
+      <button class="sym-close" id="aiSymbologyClose" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="sym-body">
+      <div id="aiSymbologyPreview" class="sym-preview"></div>
+      <div class="sym-field">
+        <span>Color</span>
+        <input type="color" id="aiSymbologyColor">
+      </div>
+      <div class="sym-field">
+        <span>Opacity</span>
+        <div class="sym-opacity-row">
+          <input type="range" id="aiSymbologyOpacityRange" min="0" max="100" step="1">
+          <input type="number" id="aiSymbologyOpacityNum" min="0" max="100" step="1">
+          <span>%</span>
+        </div>
+      </div>
+    </div>
+    <div class="sym-foot">
+      <button class="secondary" id="aiSymbologyCancel">Cancel</button>
+      <button class="secondary" id="aiSymbologyApply">Apply</button>
+      <button class="primary" id="aiSymbologyOk">OK</button>
+    </div>
   </div>
 </div>
 
@@ -6789,11 +6860,10 @@ function renderAiLayerTree(){
   el.innerHTML = entries.map((e, i) => `
     <div class="ai-layer-row" data-idx="${i}">
       <input type="checkbox" ${e.visible ? 'checked' : ''} data-action="toggle" title="Show/hide">
-      <input type="color" value="${e.color || '#999999'}" data-action="color" title="Change colour">
+      <button class="ai-layer-swatch-btn" data-action="symbology" style="background:${e.color || '#999999'};opacity:${e.opacity}" title="Layer properties — symbology"></button>
       ${e.renamable
         ? `<input type="text" class="ai-layer-name-input" value="${xmlEscape(e.name)}" data-action="rename">`
         : `<span class="ai-layer-name" title="${xmlEscape(e.name)}">${xmlEscape(e.name)}</span>`}
-      <input type="range" min="0" max="1" step="0.05" value="${e.opacity}" data-action="opacity" title="Opacity">
       <button class="icon-btn" data-action="zoom" title="Zoom to layer">&#8982;</button>
       ${e.removable ? `<button class="icon-btn del" data-action="remove" title="Remove">&times;</button>` : ''}
     </div>
@@ -6802,8 +6872,7 @@ function renderAiLayerTree(){
   el.querySelectorAll('.ai-layer-row').forEach(row=>{
     const entry = entries[+row.dataset.idx];
     row.querySelector('[data-action=toggle]').addEventListener('change', e=> entry.toggleVisible(e.target.checked));
-    row.querySelector('[data-action=color]').addEventListener('input', e=> entry.setColor(e.target.value));
-    row.querySelector('[data-action=opacity]').addEventListener('input', e=> entry.setOpacity(+e.target.value));
+    row.querySelector('[data-action=symbology]').addEventListener('click', ()=> openAiSymbologyModal(entry));
     const nameInput = row.querySelector('[data-action=rename]');
     if(nameInput) nameInput.addEventListener('change', e=>{
       const name = e.target.value.trim();
@@ -6816,6 +6885,88 @@ function renderAiLayerTree(){
     if(delBtn) delBtn.addEventListener('click', ()=>{ entry.remove(); renderAiLayerTree(); });
   });
 }
+
+/* =========================================================
+   "Layer Properties — Symbology" dialog, modelled on QGIS's own
+   layer properties panel: a preview swatch, a colour picker, and
+   an opacity slider+percentage, with live preview on the map as
+   you adjust either one (same as QGIS), Cancel reverting to
+   whatever the layer looked like when the dialog opened.
+========================================================= */
+let aiSymbologyEntry = null;
+let aiSymbologyOriginal = null; // { color, opacity } snapshot, for Cancel
+
+function openAiSymbologyModal(entry){
+  aiSymbologyEntry = entry;
+  aiSymbologyOriginal = { color: entry.color, opacity: entry.opacity };
+  document.getElementById('aiSymbologyTitle').textContent = `Layer Properties — ${entry.name} — Symbology`;
+  document.getElementById('aiSymbologyColor').value = entry.color || '#999999';
+  document.getElementById('aiSymbologyOpacityRange').value = Math.round((entry.opacity ?? 1) * 100);
+  document.getElementById('aiSymbologyOpacityNum').value = Math.round((entry.opacity ?? 1) * 100);
+  updateAiSymbologyPreview();
+  document.getElementById('aiSymbologyModal').classList.add('show');
+}
+
+function closeAiSymbologyModal(){
+  document.getElementById('aiSymbologyModal').classList.remove('show');
+  aiSymbologyEntry = null;
+  aiSymbologyOriginal = null;
+}
+
+function updateAiSymbologyPreview(){
+  const color = document.getElementById('aiSymbologyColor').value;
+  const opacity = +document.getElementById('aiSymbologyOpacityRange').value / 100;
+  document.getElementById('aiSymbologyPreview').style.background = color;
+  document.getElementById('aiSymbologyPreview').style.opacity = opacity;
+}
+
+document.getElementById('aiSymbologyColor').addEventListener('input', e=>{
+  if(!aiSymbologyEntry) return;
+  aiSymbologyEntry.setColor(e.target.value);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyOpacityRange').addEventListener('input', e=>{
+  if(!aiSymbologyEntry) return;
+  document.getElementById('aiSymbologyOpacityNum').value = e.target.value;
+  aiSymbologyEntry.setOpacity(+e.target.value / 100);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyOpacityNum').addEventListener('input', e=>{
+  if(!aiSymbologyEntry) return;
+  let v = Math.max(0, Math.min(100, +e.target.value || 0));
+  document.getElementById('aiSymbologyOpacityRange').value = v;
+  aiSymbologyEntry.setOpacity(v / 100);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyCancel').addEventListener('click', ()=>{
+  if(aiSymbologyEntry && aiSymbologyOriginal){
+    aiSymbologyEntry.setColor(aiSymbologyOriginal.color);
+    aiSymbologyEntry.setOpacity(aiSymbologyOriginal.opacity);
+  }
+  closeAiSymbologyModal();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyApply').addEventListener('click', ()=>{
+  // Values are already applied live as the dialog's own inputs change
+  // (same as QGIS) — Apply just re-baselines Cancel's revert point so a
+  // Cancel after this only undoes changes made since the last Apply.
+  if(aiSymbologyEntry) aiSymbologyOriginal = { color: aiSymbologyEntry.color, opacity: aiSymbologyEntry.opacity };
+});
+document.getElementById('aiSymbologyOk').addEventListener('click', ()=>{
+  closeAiSymbologyModal();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyClose').addEventListener('click', ()=>{
+  if(aiSymbologyEntry && aiSymbologyOriginal){
+    aiSymbologyEntry.setColor(aiSymbologyOriginal.color);
+    aiSymbologyEntry.setOpacity(aiSymbologyOriginal.opacity);
+  }
+  closeAiSymbologyModal();
+  renderAiLayerTree();
+});
 
 function handleAiDatasetUpload(file){
   const statusEl = document.getElementById('aiUploadStatus');
