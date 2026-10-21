@@ -96,6 +96,31 @@ def _layer_utm_epsg(layer) -> int:
     return utm_epsg_for_lonlat(centre.x(), centre.y())
 
 
+def _fix_geometries(layer):
+    """Repairs self-intersections and other invalid geometry via
+    `native:fixgeometries` (METHOD=1, "Structure" — more robust than the
+    default "Linework" method for the kind of self-intersecting polygon a
+    union/difference of real, vertex-dense vegetation data produces).
+
+    Run on the OUTPUT of every geometry-combining operation below (clip,
+    intersection, difference, dissolve, merge_with_precedence), not on
+    freshly-fetched input data — confirmed against this app's own real
+    QGIS install that a `native:difference` result can carry an invalid
+    geometry silently all the way through to a *later* operation in the
+    same plan (e.g. calculate_area's `native:exportaddgeometrycolumns`,
+    several steps downstream) and only fail there with "Feature (N) ...
+    has invalid geometry", far from whichever operation actually produced
+    it. Fixing right where each new geometry is created, rather than only
+    at the point something eventually complains, keeps a bad geometry
+    from ever reaching the next operation in a chain."""
+    import processing
+    return processing.run("native:fixgeometries", {
+        "INPUT": layer,
+        "METHOD": 1,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+
+
 def buffer(input_geojson: dict, distance: float, units: str) -> dict:
     """`input_geojson` buffered by `distance` `units` ("metres" or
     "kilometres"), via `native:buffer`. Reprojects into the input's own UTM
@@ -140,7 +165,7 @@ def clip(input_geojson: dict, overlay_geojson: dict) -> dict:
         "OVERLAY": overlay_layer,
         "OUTPUT": "memory:",
     })["OUTPUT"]
-    return layer_to_geojson(result)
+    return layer_to_geojson(_fix_geometries(result))
 
 
 def intersection(input_geojson: dict, overlay_geojson: dict) -> dict:
@@ -158,7 +183,7 @@ def intersection(input_geojson: dict, overlay_geojson: dict) -> dict:
         "OVERLAY_FIELDS_PREFIX": "",
         "OUTPUT": "memory:",
     })["OUTPUT"]
-    return layer_to_geojson(result)
+    return layer_to_geojson(_fix_geometries(result))
 
 
 def difference(input_geojson: dict, overlay_geojson: dict) -> dict:
@@ -173,7 +198,7 @@ def difference(input_geojson: dict, overlay_geojson: dict) -> dict:
         "OVERLAY": overlay_layer,
         "OUTPUT": "memory:",
     })["OUTPUT"]
-    return layer_to_geojson(result)
+    return layer_to_geojson(_fix_geometries(result))
 
 
 def dissolve(input_geojson: dict, field: str | None = None) -> dict:
@@ -192,7 +217,7 @@ def dissolve(input_geojson: dict, field: str | None = None) -> dict:
         "SEPARATE_DISJOINT": False,
         "OUTPUT": "memory:",
     })["OUTPUT"]
-    return layer_to_geojson(result)
+    return layer_to_geojson(_fix_geometries(result))
 
 
 def calculate_area(input_geojson: dict, units: str) -> dict:
@@ -207,7 +232,7 @@ def calculate_area(input_geojson: dict, units: str) -> dict:
     ensure_qgis_initialized()
     layer = geojson_to_layer(input_geojson, "area_input")
     epsg = _layer_utm_epsg(layer)
-    projected = reproject(layer, epsg)
+    projected = reproject(_fix_geometries(layer), epsg)
 
     with_area = processing.run("native:exportaddgeometrycolumns", {
         "INPUT": projected,
@@ -302,7 +327,7 @@ def merge_with_precedence(input_geojson: dict, overlay_geojson: dict) -> dict:
         "OVERLAY": overlay_layer,
         "OUTPUT": "memory:",
     })["OUTPUT"]
-    remainder_geojson = layer_to_geojson(remainder)
+    remainder_geojson = layer_to_geojson(_fix_geometries(remainder))
     combined_features = list(overlay_geojson.get("features", [])) + list(remainder_geojson.get("features", []))
     return {"type": "FeatureCollection", "features": combined_features}
 

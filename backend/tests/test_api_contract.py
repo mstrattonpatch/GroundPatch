@@ -266,6 +266,35 @@ def test_merge_with_precedence_lets_overlay_win_on_overlap():
 
 
 @requires_qgis
+def test_calculate_area_does_not_choke_on_an_invalid_geometry():
+    """Regression test for a real failure: native:difference (used inside
+    merge_with_precedence, and reachable on its own via `difference`) can
+    produce a self-intersecting polygon from real-world vegetation data,
+    which native:exportaddgeometrycolumns then refuses to process — "Feature
+    (N) ... has invalid geometry" — several operations downstream of
+    whichever one actually created it. gis_worker._fix_geometries() is
+    meant to repair that right where each new geometry is created, so a bad
+    geometry never reaches a later operation in the same plan.
+
+    Feeds calculate_area a deliberately self-intersecting "bowtie" polygon
+    directly (not routed through difference) to isolate exactly what this
+    test is checking: that calculate_area itself tolerates/repairs an
+    invalid input rather than raising, independent of whichever upstream
+    operation produced it."""
+    from app.gis_worker import calculate_area
+
+    bowtie = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"name": "bowtie"}, "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[151.0, -33.8], [151.001, -33.799], [151.001, -33.8], [151.0, -33.799], [151.0, -33.8]]],
+        }},
+    ]}
+    result = calculate_area(bowtie, "hectares")
+    assert len(result["features"]) == 1
+    assert result["features"][0]["properties"]["area_ha"] > 0
+
+
+@requires_qgis
 def test_chat_with_mocked_ai_proposes_and_executes_a_real_plan(monkeypatch):
     """Fakes only the Anthropic API call - everything downstream (plan
     parsing, validation, real PyQGIS execution, results storage) is the
