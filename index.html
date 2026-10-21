@@ -6644,20 +6644,34 @@ function aiGisSampleValues(geojson){
   return out;
 }
 
+function aiGisLayerSummary(id, name, geojson, extra){
+  return {
+    id, name,
+    geometry_type: (geojson.features[0].geometry || {}).type === 'MultiPolygon' ? 'Polygon' : (geojson.features[0].geometry || {}).type,
+    fields: Object.keys(geojson.features[0].properties || {}),
+    status: 'complete',
+    retrieved_at: null,
+    sample_values: aiGisSampleValues(geojson),
+    ...extra,
+  };
+}
+
 function buildAiGisSiteContext(){
+  const fetchedLayers = layers
+    .filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length)
+    .map(l=> aiGisLayerSummary(aiGisSlug(l.name), l.name, l.lastGeoJSON, { status: l.queryStatus || 'not_queried', retrieved_at: l.retrievedAt || null }));
+  // Datasets uploaded straight into the AI Analysis workspace (+ Add
+  // dataset) weren't queried from a government service — same shape as
+  // every other layer here otherwise, so the model can reference and act
+  // on them the same way it would svtm_extant_pct or any other layer id.
+  const uploadedLayers = aiUploadedLayers
+    .filter(u=>u.geojson && u.geojson.features && u.geojson.features.length)
+    .map(u=> aiGisLayerSummary(u.id, u.name, u.geojson));
   return {
     boundary: boundaryGeom,
     assessment_buffer_km: ASSESSMENT_BUFFER_KM,
     context_buffer_km: CONTEXT_BUFFER_KM,
-    layers: layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).map(l=>({
-      id: aiGisSlug(l.name),
-      name: l.name,
-      geometry_type: (l.lastGeoJSON.features[0].geometry || {}).type === 'MultiPolygon' ? 'Polygon' : (l.lastGeoJSON.features[0].geometry || {}).type,
-      fields: Object.keys(l.lastGeoJSON.features[0].properties || {}),
-      status: l.queryStatus || 'not_queried',
-      retrieved_at: l.retrievedAt || null,
-      sample_values: aiGisSampleValues(l.lastGeoJSON),
-    })),
+    layers: [...fetchedLayers, ...uploadedLayers],
   };
 }
 
@@ -6703,6 +6717,9 @@ async function sendAiGisChatMessage(){
     layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length).forEach(l=>{
       layerData[aiGisSlug(l.name)] = l.lastGeoJSON;
     });
+    aiUploadedLayers.filter(u=>u.geojson && u.geojson.features && u.geojson.features.length).forEach(u=>{
+      layerData[u.id] = u.geojson;
+    });
 
     const resp = await fetch(`${backendUrl}/api/chat`, {
       method:'POST', headers:{ 'Content-Type':'application/json' },
@@ -6734,8 +6751,12 @@ async function renderAiGisResults(outputLayers, backendUrl, jobId){
   Object.values(aiGisResultLayers).forEach(entry => { if(entry.mapLayerGroup) map.removeLayer(entry.mapLayerGroup); });
   aiGisResultLayers = {};
 
+  // No separate card list here any more — every output layer this
+  // produces also shows up in the unified layer tree on the left (same
+  // toggle/symbology/zoom/export controls as everything else), so this
+  // panel just needs a short confirmation, not a second set of controls.
   const el = document.getElementById('aiGisResults');
-  el.innerHTML = '';
+  const summaryLines = [];
 
   for(const meta of outputLayers){
     const resp = await fetch(`${backendUrl}/api/jobs/${jobId}/layers/${encodeURIComponent(meta.layer_id)}`);
@@ -6751,28 +6772,11 @@ async function renderAiGisResults(outputLayers, backendUrl, jobId){
       },
     }).addTo(map);
     aiGisResultLayers[meta.layer_id] = { geojson, mapLayerGroup, name: meta.layer_id, color:'#6B4FA0', opacity:0.3 };
-
-    const card = document.createElement('div');
-    card.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px;';
-    card.innerHTML = `
-      <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" checked data-toggle></label>
-      <span class="swatch" style="background:#6B4FA0;"></span>
-      <span style="flex:1;">${escHtml(meta.layer_id)}</span>
-      <span class="badge hit">${meta.feature_count} feature${meta.feature_count===1?'':'s'}</span>
-      <button class="textbtn" style="margin:0;" data-zoom>Zoom</button>
-      <button class="textbtn" style="margin:0;" data-export>Export</button>
-    `;
-    el.appendChild(card);
-    card.querySelector('[data-toggle]').addEventListener('change', e=>{
-      if(e.target.checked) mapLayerGroup.addTo(map); else map.removeLayer(mapLayerGroup);
-    });
-    card.querySelector('[data-zoom]').addEventListener('click', ()=>{
-      try{ map.flyToBounds(mapLayerGroup.getBounds(), { maxZoom:17, padding:[40,40] }); }catch(e){}
-    });
-    card.querySelector('[data-export]').addEventListener('click', (e)=>{
-      exportShapefile(geojson, aiGisSlug(meta.layer_id), { color:'#6B4FA0', noCategorize:true }, e.target);
-    });
+    summaryLines.push(`${meta.layer_id} — ${meta.feature_count} feature${meta.feature_count===1?'':'s'}`);
   }
+  el.innerHTML = summaryLines.length
+    ? `<p class="section-note" style="margin:0;">Added to the layer tree: ${summaryLines.map(escHtml).join(', ')}.</p>`
+    : '';
   if(document.getElementById('aiLayerPanel').classList.contains('open')) renderAiLayerTree();
 }
 
@@ -6800,6 +6804,7 @@ function getAiWorkspaceEntries(){
       color: boundarySymbology.color, opacity: boundarySymbology.fillOpacity,
       visible: map.hasLayer(boundaryLayer), removable:false, renamable:false,
       getLayer: ()=> boundaryLayer,
+      getGeoJSON: ()=> ({ type:'FeatureCollection', features:[{ type:'Feature', properties:{}, geometry: boundaryGeom }] }),
       toggleVisible:(v)=>{ if(v) boundaryLayer.addTo(map); else map.removeLayer(boundaryLayer); },
       setColor:(c)=>{ boundarySymbology.color = c; boundaryLayer.setStyle({ color:c, fillColor:c }); },
       setOpacity:(o)=>{ boundarySymbology.fillOpacity = o; boundaryLayer.setStyle({ fillOpacity:o }); },
@@ -6813,6 +6818,7 @@ function getAiWorkspaceEntries(){
       color: l.color, opacity: l.workspaceOpacity,
       visible: map.hasLayer(l.mapLayerGroup), removable:false, renamable:false,
       getLayer: ()=> l.mapLayerGroup,
+      getGeoJSON: ()=> l.lastGeoJSON,
       toggleVisible:(v)=>{ l.visible = v; if(v) l.mapLayerGroup.addTo(map); else map.removeLayer(l.mapLayerGroup); },
       // Flattens any per-feature category colouring (e.g. GDE High/Medium/Low)
       // into one single-symbol colour — editing symbology here trades away
@@ -6829,6 +6835,7 @@ function getAiWorkspaceEntries(){
       color: u.color, opacity: u.opacity,
       visible: map.hasLayer(u.mapLayerGroup), removable:true, renamable:true,
       getLayer: ()=> u.mapLayerGroup,
+      getGeoJSON: ()=> u.geojson,
       toggleVisible:(v)=>{ if(v) u.mapLayerGroup.addTo(map); else map.removeLayer(u.mapLayerGroup); },
       setColor:(c)=>{ u.color = c; u.mapLayerGroup.setStyle({ color:c, fillColor:c }); },
       setOpacity:(o)=>{ u.opacity = o; u.mapLayerGroup.setStyle({ fillOpacity:o }); },
@@ -6843,6 +6850,7 @@ function getAiWorkspaceEntries(){
       color: entry.color, opacity: entry.opacity,
       visible: map.hasLayer(entry.mapLayerGroup), removable:true, renamable:true,
       getLayer: ()=> entry.mapLayerGroup,
+      getGeoJSON: ()=> entry.geojson,
       toggleVisible:(v)=>{ if(v) entry.mapLayerGroup.addTo(map); else map.removeLayer(entry.mapLayerGroup); },
       setColor:(c)=>{ entry.color = c; entry.mapLayerGroup.setStyle({ color:c, fillColor:c }); },
       setOpacity:(o)=>{ entry.opacity = o; entry.mapLayerGroup.setStyle({ fillOpacity:o }); },
@@ -6864,6 +6872,7 @@ function renderAiLayerTree(){
       ${e.renamable
         ? `<input type="text" class="ai-layer-name-input" value="${xmlEscape(e.name)}" data-action="rename">`
         : `<span class="ai-layer-name" title="${xmlEscape(e.name)}">${xmlEscape(e.name)}</span>`}
+      <button class="icon-btn" data-action="table" title="View attribute table">&#9776;</button>
       <button class="icon-btn" data-action="zoom" title="Zoom to layer">&#8982;</button>
       ${e.removable ? `<button class="icon-btn del" data-action="remove" title="Remove">&times;</button>` : ''}
     </div>
@@ -6877,6 +6886,9 @@ function renderAiLayerTree(){
     if(nameInput) nameInput.addEventListener('change', e=>{
       const name = e.target.value.trim();
       if(name) entry.setName(name); else e.target.value = entry.name;
+    });
+    row.querySelector('[data-action=table]').addEventListener('click', ()=>{
+      openAttributeTable({ name: entry.name, lastGeoJSON: entry.getGeoJSON() });
     });
     row.querySelector('[data-action=zoom]').addEventListener('click', ()=>{
       try{ map.flyToBounds(entry.getLayer().getBounds(), { maxZoom:17, padding:[40,40] }); }catch(err){}
