@@ -1,14 +1,17 @@
 """
-FastAPI app — the 6 endpoints from the proposal's API table.
+FastAPI app — a superset of the proposal's original API table.
 
-Phase 1 status (see backend/README.md): /api/ai/plan is still a stub (one
-fixed illustrative plan, `mock: true` — no AI call wired in yet). /api/jobs,
-/api/jobs/{id}, /api/jobs/{id}/results and /api/jobs/{id}/layers/{layer_id}
-are REAL — jobs.create_job() actually executes the plan through
-gis_worker.py's PyQGIS tool functions and these endpoints serve the real
-stored results (`mock: false`), requiring a PyQGIS-capable environment (see
-environment-qgis.yml). /api/jobs/{id}/project is still mocked — Phase 3
-(QGIS project generation) hasn't been built yet.
+/api/chat replaces the originally-proposed single-shot /api/ai/plan: a real
+conversational endpoint (see planner.chat_turn()) rather than a one-shot
+"give me a plan" call, since that's what the actual product direction needs
+— a chat workspace, not a form. It still proposes-then-executes through the
+exact same validated pipeline as every other path in (validator.py,
+gis_worker.py) — the model never runs anything outside
+gis_worker.APPROVED_TOOLS. /api/jobs, /api/jobs/{id}, /api/jobs/{id}/results
+and /api/jobs/{id}/layers/{layer_id} are REAL — jobs.create_job() actually
+executes a plan through gis_worker.py's PyQGIS tool functions (needs a
+PyQGIS-capable environment, see environment-qgis.yml). /api/jobs/{id}/project
+is still mocked — Phase 3 (QGIS project generation) hasn't been built yet.
 """
 from __future__ import annotations
 
@@ -21,12 +24,12 @@ from fastapi.responses import StreamingResponse
 
 from . import jobs, planner
 from .models import (
+    ChatRequest,
+    ChatResponse,
     JobCreateRequest,
     JobResultsResponse,
     JobStatusResponse,
     LayerFeaturesResponse,
-    PlanRequest,
-    PlanResponse,
 )
 
 app = FastAPI(
@@ -60,9 +63,9 @@ def health() -> dict[str, bool | str]:
     return {"ok": True, "qgis_available_in_this_process": QGIS_AVAILABLE}
 
 
-@app.post("/api/ai/plan", response_model=PlanResponse)
-def post_ai_plan(request: PlanRequest) -> PlanResponse:
-    return planner.plan_from_request(request)
+@app.post("/api/chat", response_model=ChatResponse)
+def post_chat(request: ChatRequest) -> ChatResponse:
+    return planner.chat_turn(request)
 
 
 @app.post("/api/jobs", response_model=JobStatusResponse)

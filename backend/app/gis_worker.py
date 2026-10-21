@@ -73,6 +73,18 @@ APPROVED_TOOLS: dict[str, dict[str, str]] = {
         "algorithm_id": "qgis:distancetonearesthubpoints",
         "summary": "Distance (metres) from each feature in `input` to the nearest feature in `overlay`.",
     },
+    "reclassify": {
+        "algorithm_id": "(attribute remap - no geometry op)",
+        "summary": "Recode `params.field` on `input` per `params.mapping` (old value -> new value). Unmapped values are kept as-is and flagged back as a warning.",
+    },
+    "merge_with_precedence": {
+        "algorithm_id": "native:difference (input minus overlay) + feature union",
+        "summary": "Combines `input` and `overlay`, with `overlay` taking precedence wherever the two overlap (overlay's own features are kept unchanged; input only fills the gaps outside overlay's footprint). For \"layer B replaces layer A wherever B has coverage\".",
+    },
+    "filter_by_attribute": {
+        "algorithm_id": "(attribute filter - no geometry op)",
+        "summary": "Keeps only features of `input` where `params.field`'s value is in `params.values`.",
+    },
 }
 
 
@@ -243,6 +255,71 @@ def calculate_distance(input_geojson: dict, overlay_geojson: dict) -> dict:
     return layer_to_geojson(result)
 
 
+def reclassify(input_geojson: dict, field: str, mapping: dict) -> dict:
+    """Recodes `field` on every feature per `mapping` (compared/looked up
+    as strings, so this works whether the source field is numeric or text
+    in the original data). A feature whose value isn't a key in `mapping`
+    keeps its original value - unchanged, not dropped - but every such
+    value is collected into a reserved `_unmapped_values` key on the
+    returned FeatureCollection (the same "extra key on a GeoJSON object"
+    convention index.html itself already uses for truncated/partial
+    flags), so jobs.py can surface it as a warning rather than silently
+    passing through data that didn't match the table. Pure attribute
+    work - no geometry touched, no QGIS needed."""
+    str_mapping = {str(k): v for k, v in (mapping or {}).items()}
+    unmapped = set()
+    features = []
+    for f in input_geojson.get("features", []):
+        props = dict(f.get("properties") or {})
+        raw = props.get(field)
+        key = str(raw)
+        if key in str_mapping:
+            props[field] = str_mapping[key]
+        elif raw is not None:
+            unmapped.add(key)
+        features.append({**f, "properties": props})
+    result = {"type": "FeatureCollection", "features": features}
+    if unmapped:
+        result["_unmapped_values"] = sorted(unmapped)
+    return result
+
+
+def merge_with_precedence(input_geojson: dict, overlay_geojson: dict) -> dict:
+    """Combines `input_geojson` and `overlay_geojson`, with `overlay_geojson`
+    taking precedence wherever they overlap: returns overlay's own features
+    unchanged, plus whatever of input falls outside overlay's combined
+    footprint (`native:difference`). This is "layer B sits on top of /
+    replaces layer A wherever B has coverage, A fills the rest" - not a
+    topological dissolve, so each source's own attributes are preserved on
+    its own features rather than merged into one."""
+    import processing
+
+    ensure_qgis_initialized()
+    input_layer = geojson_to_layer(input_geojson, "merge_input")
+    overlay_layer = geojson_to_layer(overlay_geojson, "merge_overlay")
+    remainder = processing.run("native:difference", {
+        "INPUT": input_layer,
+        "OVERLAY": overlay_layer,
+        "OUTPUT": "memory:",
+    })["OUTPUT"]
+    remainder_geojson = layer_to_geojson(remainder)
+    combined_features = list(overlay_geojson.get("features", [])) + list(remainder_geojson.get("features", []))
+    return {"type": "FeatureCollection", "features": combined_features}
+
+
+def filter_by_attribute(input_geojson: dict, field: str, values: list) -> dict:
+    """Keeps only features where `field`'s value (compared as a string) is
+    in `values`. Pure attribute filtering, no geometry operation, no QGIS
+    needed - typically chained straight into `dissolve` (filter down to a
+    set of community/class codes, then dissolve them into one polygon),
+    rather than built as one combined tool, since Phase 1's plan chaining
+    already covers that without growing dissolve's own signature."""
+    wanted = {str(v) for v in (values or [])}
+    features = [f for f in input_geojson.get("features", [])
+                if str((f.get("properties") or {}).get(field)) in wanted]
+    return {"type": "FeatureCollection", "features": features}
+
+
 # Maps APPROVED_TOOLS keys to the actual callables above, for jobs.py to
 # dispatch through rather than hardcoding a tool->function mapping of its own.
 TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
@@ -253,4 +330,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "dissolve": dissolve,
     "calculate_area": calculate_area,
     "calculate_distance": calculate_distance,
+    "reclassify": reclassify,
+    "merge_with_precedence": merge_with_precedence,
+    "filter_by_attribute": filter_by_attribute,
 }

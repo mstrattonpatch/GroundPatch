@@ -2,16 +2,23 @@
 
 **Phase 1 is implemented and verified against real QGIS** (not mocked, not
 just written — see "Verified" below for exactly what was run and what came
-back). **Phase 2's core loop is also wired up**: `index.html` now has an
-"AI GIS analysis" sidebar section that builds a plan, calls this backend,
-and renders the resulting layer(s) on the map with toggle/zoom/export
-controls — see its own commit message for what was verified (the exact
-request/response contract, against the real running service) and what
-wasn't (no browser available in the dev sandbox this was built in, so the
-UI itself has never been visually exercised). `/api/ai/plan` is still a
-stub (no real AI call), so the plan is built through a structured form, not
-free-text chat. Phase 3 (QGIS project generation) and Phase 4 (production
-readiness) are not started.
+back). **Phase 2 is now a real chat, not a structured form**: `index.html`'s
+"AI GIS analysis" sidebar is a chat panel — you describe the analysis in
+plain English, the backend's `/api/chat` endpoint sends that (plus the site's
+real layer data and sampled attribute values) to Claude, which can propose a
+plan using the approved tool catalogue; the validated plan then runs through
+the same real Phase 1 execution pipeline and the resulting layer(s) come back
+in the same chat turn and get added to the map with toggle/zoom/export
+controls. The catalogue has grown from the original 7 tools to 10 — it now
+also covers reclassifying a field against a value mapping, merging two
+layers with one taking precedence over the other, and filtering by
+attribute — covering realistic consulting workflows (recoding PCT codes,
+consolidating a clipped layer with a client-supplied override layer) rather
+than just the proposal's original buffer/overlay/area example. `/api/chat`
+needs `ANTHROPIC_API_KEY` set in this backend's environment — without it, it
+returns a clear mock reply saying so rather than failing or fabricating a
+plan. Phase 3 (QGIS project generation) and Phase 4 (production readiness)
+are not started.
 
 ## Why this exists
 
@@ -24,13 +31,11 @@ style → QGIS project) — that needs a proper GIS engine, which means a
 backend.
 
 The goal is to **extend** GroundPatch, not replace it: the browser stays the
-map/UI, this backend is a service a sidebar panel asks to run an analysis,
-the result comes back as GeoJSON and gets added to the map with its own
-toggle/zoom/export controls. `index.html` now has an "AI GIS analysis"
-section that does exactly this (see its own commit) — built as a structured
-operation form rather than the proposal's free-text chat, since
-`/api/ai/plan` is still a stub and a chat box over a stub would be
-misleading.
+map/UI, this backend is a service a chat panel talks to, the result comes
+back as GeoJSON and gets added to the map with its own toggle/zoom/export
+controls. `index.html`'s "AI GIS analysis" section is that chat panel —
+free-text, not a form, now that `/api/chat` is backed by a real model call
+rather than a stub.
 
 ## Architecture
 
@@ -38,15 +43,17 @@ misleading.
 index.html (existing)          backend/ (this directory)
 ┌─────────────────────┐        ┌──────────────────────────────────────┐
 │ Leaflet map           │  HTTP │ FastAPI app (app/main.py)             │
-│ Layer registry         │◄────►│   - POST /api/ai/plan      [stub]     │
-│ "AI GIS analysis" panel│      │   - POST /api/jobs          [real]    │
-│ (structured plan        │     │   - GET  /api/jobs/{id}      [real]   │
-│  builder, not chat)      │    │   - GET  /api/jobs/{id}/results [real]│
+│ Layer registry         │◄────►│   - POST /api/chat          [real]    │
+│ "AI GIS analysis" chat │      │   - POST /api/jobs          [real]    │
+│ panel (free-text)       │     │   - GET  /api/jobs/{id}      [real]   │
+│                           │   │   - GET  /api/jobs/{id}/results [real]│
 └─────────────────────┘        │   - GET  /api/jobs/{id}/layers/{lid}  │
                                 │                              [real]  │
                                 │   - GET  /api/jobs/{id}/project [stub]│
                                 │                                        │
-                                │ app/planner.py   — AI planning  [stub] │
+                                │ app/planner.py   — AI chat + planning   │
+                                │                    [real, needs        │
+                                │                     ANTHROPIC_API_KEY] │
                                 │ app/validator.py — plan validation     │
                                 │ app/jobs.py      — job lifecycle       │
                                 │ app/qgis_runtime.py — QGIS boot/thread │
@@ -56,15 +63,22 @@ index.html (existing)          backend/ (this directory)
                                 └──────────────────────────────────────┘
 ```
 
-**The AI plans, the GIS engine executes.** The AI (`app/planner.py` — still
-a stub, see below) turns a natural-language request into a structured JSON
+**The AI plans, the GIS engine executes.** The AI (`app/planner.py`, via the
+Anthropic API) turns a natural-language request into a structured JSON
 plan — a list of named operations from a fixed, approved catalogue (buffer,
-clip, intersection, dissolve, calculate_area, calculate_distance). It never
-generates or runs arbitrary Python. `app/validator.py` checks that plan
-against the actual site/layer catalogue (inputs exist, every tool is on the
-approved list, units are valid for that specific tool) before anything
-executes — real logic, not a stub. Only `app/gis_worker.py` touches real
-geometry, and only through QGIS Processing algorithms, not ad hoc code.
+clip, intersection, difference, dissolve, calculate_area, calculate_distance,
+reclassify, merge_with_precedence, filter_by_attribute). It does this by
+calling a single tool, `propose_gis_plan`, whose schema mirrors
+`models.GisPlan` — the model can never submit anything outside that shape,
+and it never generates or runs arbitrary Python. `app/validator.py` checks
+the resulting plan against the actual site/layer catalogue (inputs exist,
+every tool is on the approved list, units/params are valid for that specific
+tool) before anything executes — real logic, not a stub. Only
+`app/gis_worker.py` touches real geometry, and only through QGIS Processing
+algorithms (or, for `filter_by_attribute`, plain Python over the GeoJSON —
+no QGIS call needed for that one), not ad hoc code. This is the one thing
+that stays true regardless of how free-form the chat UI looks: the model
+proposes, it never executes directly.
 
 ### Example plan (the exact shape `app/models.py` defines, and what Phase 1 actually runs)
 
@@ -163,13 +177,13 @@ backend/
   environment-qgis.yml       — conda-forge spec for the PyQGIS worker environment
   app/
     __init__.py
-    main.py                — FastAPI app, the 6 endpoints
-    models.py               — Pydantic models: the plan schema, job status, layer catalogue entry
-    planner.py              — AI planning layer [STUB — no AI call wired in yet]
+    main.py                — FastAPI app, the 6 endpoints, CORS
+    models.py               — Pydantic models: the plan schema, chat request/response, job status, layer catalogue entry
+    planner.py              — AI chat + planning layer [real — calls the Anthropic API, needs ANTHROPIC_API_KEY]
     validator.py            — plan validation [real]
     jobs.py                  — job lifecycle: validates, then executes via gis_worker [real]
     qgis_runtime.py           — QgsApplication/Processing bootstrap, GeoJSON<->layer conversion, the single QGIS worker thread
-    gis_worker.py             — the 7 approved tools, each a real QGIS Processing call [real]
+    gis_worker.py             — the 10 approved tools, each a real QGIS Processing call (or plain Python, for filter_by_attribute) [real]
     project_builder.py        — .qgz/.gpkg package assembly [STUB — Phase 3]
     storage.py                 — job/result storage (in-memory for now; PostGIS is a later option)
   tests/
@@ -201,19 +215,27 @@ heavier, conda-only footprint.
    `output`) — the proposal lists chaining under Phase 2, but it fell out
    naturally from how `jobs.py` executes a plan and didn't need separate
    work.
-2. **Phase 2 — map sync.** ✅ core loop. `index.html`'s "AI GIS analysis"
-   section builds a plan (structured form, not chat — `/api/ai/plan` is
-   still a stub), sends the layer catalogue + real feature data, and
-   renders every output layer on the map with its own toggle/zoom/export
-   row. Verified: the exact request/response contract, against the real
-   running backend (see that commit's message) — **not** verified: the
-   actual browser UI, since no browser is available in the sandbox this
-   was built in. **Not done**: a stats table, confirmation before an
-   expensive job runs, cancellation, and persisting a job's results past a
-   page refresh (today a refresh just loses the AI-generated layers, same
-   as it would for anything else not in the saved session — the backend's
-   own storage is in-memory and ephemeral anyway, so there's nothing
-   durable to resume against yet regardless of what `index.html` does).
+2. **Phase 2 — map sync, and a real chat.** ✅ `index.html`'s "AI GIS
+   analysis" section is a chat panel: free-text in, `/api/chat` sends the
+   conversation plus the real layer catalogue (with sampled attribute
+   values, so the model can see real PCT codes/condition classes/etc., not
+   just field names) and real feature data to Claude, which can propose a
+   plan via the `propose_gis_plan` tool; the plan runs through the same
+   real Phase 1 pipeline and every output layer is rendered on the map with
+   its own toggle/zoom/export row in the same turn. Verified: the exact
+   chat request/response contract against the real running backend
+   (including the no-API-key mock-reply path and, server-side, a mocked-AI
+   end-to-end test that drives a real buffer+intersection plan all the way
+   through to computed output layers — see
+   `test_chat_with_mocked_ai_proposes_and_executes_a_real_plan`) — **not**
+   verified: the actual browser UI, since no browser is available in the
+   sandbox this was built in. **Not done**: a stats table, confirmation
+   before an expensive job runs, cancellation, and persisting a job's
+   results past a page refresh (today a refresh just loses the
+   AI-generated layers and the conversation, same as it would for anything
+   else not in the saved session — the backend's own storage is in-memory
+   and ephemeral anyway, so there's nothing durable to resume against yet
+   regardless of what `index.html` does).
 3. **Phase 3 — QGIS project generation.** Not started. `project_builder.py`
    is a stub; see its docstring for the implementation plan and the output
    ZIP shape (`.qgz` + `.gpkg` + `analysis_summary.csv` +
@@ -238,8 +260,11 @@ heavier, conda-only footprint.
 ```
 conda env create -f environment-qgis.yml
 conda activate groundpatch-gis
-pip install -r requirements.txt   # FastAPI/uvicorn/pydantic, into the same env
+pip install -r requirements.txt   # FastAPI/uvicorn/pydantic/anthropic, into the same env
 export QT_QPA_PLATFORM=offscreen  # headless server - see "GIS engine: PyQGIS" above
+export ANTHROPIC_API_KEY=sk-ant-...  # required for real chat; omit and /api/chat
+                                      # returns a clear mock reply instead
+# export ANTHROPIC_MODEL=claude-...  # optional override; defaults to claude-sonnet-5-5
 uvicorn app.main:app --reload
 ```
 
@@ -247,7 +272,12 @@ uvicorn app.main:app --reload
 conda env (plain `pip install -r requirements.txt` in any Python 3.11+
 environment), the same `uvicorn app.main:app` boots and every endpoint
 responds — `/api/jobs` with a plan that needs real execution returns a
-clear `RuntimeError` message instead of a result.
+clear `RuntimeError` message instead of a result. `index.html`'s "AI GIS
+analysis" panel has its own "Backend URL" field (saved in `localStorage`,
+defaulting to `http://localhost:8000`) — point it at wherever this service
+actually runs; it needs CORS-reachability from the browser origin the page
+is served from (wide open by default, see `main.py`'s comment on
+`allow_origins`).
 
 ### Running the test suite
 
@@ -256,12 +286,18 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-11 tests: 8 run in any environment (health check, plan stub shape,
-validation rejection cases, 404s, the mock project-ZIP download). 3 need
+16 tests: 10 run in any environment (health check, chat without an API key
+returns a clear mock reply, validation rejection cases for every tool
+including the 3 newer ones, 404s, the mock project-ZIP download). 6 need
 `groundpatch-gis` and auto-skip without it (`QGIS_AVAILABLE` gate) — real
 end-to-end job execution, real results/layer endpoints returning computed
-geometry, and a regression test specifically for the CRS/units footgun
-(buffer distance must visibly correspond to real metres, not raw degrees).
+geometry, a regression test specifically for the CRS/units footgun (buffer
+distance must visibly correspond to real metres, not raw degrees),
+`reclassify`/`merge_with_precedence` behaving correctly against real
+geometry, and the critical one — `/api/chat` with the Anthropic API call
+itself mocked out (via `monkeypatch.setitem(sys.modules, "anthropic", ...)`)
+but every downstream step real: plan parsing, validation, actual PyQGIS
+execution, and results coming back in the chat reply.
 
 ## Verified
 
@@ -286,3 +322,15 @@ Not just written — run, in this repository's own dev sandbox, both ways:
   `distancetonearesthubpoints` is `qgis:`-prefixed, not `native:`. Both
   fixed in `gis_worker.APPROVED_TOOLS` and confirmed working, not just
   assumed from documentation.
+- **Chat pivot (this round)**: re-ran the full suite against the same
+  `groundpatch-gis` conda env — 16 passed, including the mocked-AI
+  end-to-end chat test. Also hit the real running backend's `/api/chat`
+  directly with a Node script reproducing `index.html`'s exact
+  `aiGisSlug`/`aiGisSampleValues`/`buildAiGisSiteContext` payload shape
+  (not a hand-written stand-in): with no `ANTHROPIC_API_KEY` set, got back
+  `mock: true` and the expected plain-English explanation; confirmed
+  `access-control-allow-origin: *` is actually present on a request sent
+  with an `Origin` header (a browser request), not just assumed from the
+  middleware config. `index.html`'s chat UI itself still hasn't been
+  visually exercised — same no-browser-in-sandbox caveat as Phase 2's
+  first pass.

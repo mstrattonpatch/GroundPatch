@@ -14,6 +14,8 @@ Two tiers, split by whether they need a PyQGIS-capable environment:
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -68,13 +70,18 @@ def test_health():
     assert resp.json()["ok"] is True
 
 
-def test_ai_plan_returns_mock_plan():
-    resp = client.post("/api/ai/plan", json={"request": "buffer and intersect", "site_context": SITE_CONTEXT})
+def test_chat_without_api_key_returns_clear_mock_reply(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    resp = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "buffer the site by 500m"}],
+        "site_context": SITE_CONTEXT,
+    })
     assert resp.status_code == 200
     body = resp.json()
     assert body["mock"] is True
-    assert len(body["plan"]["operations"]) == 3
-    assert body["plan"]["operations"][0]["tool"] == "buffer"
+    assert "ANTHROPIC_API_KEY" in body["reply"]
+    assert body["plan"] is None
+    assert body["job"] is None
 
 
 def test_create_job_rejects_unapproved_tool():
@@ -92,6 +99,23 @@ def test_create_job_rejects_wrong_units_for_tool():
     body = resp.json()
     assert body["state"] == "error"
     assert any("is not valid for 'buffer'" in e for e in body["errors"])
+
+
+def test_create_job_rejects_reclassify_missing_params():
+    plan = {"operations": [{"tool": "reclassify", "input": "subject_site", "output": "x"}]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": SITE_CONTEXT})
+    body = resp.json()
+    assert body["state"] == "error"
+    assert any("requires params.field" in e for e in body["errors"])
+    assert any("requires params.mapping" in e for e in body["errors"])
+
+
+def test_create_job_rejects_filter_by_attribute_missing_values():
+    plan = {"operations": [{"tool": "filter_by_attribute", "input": "subject_site", "params": {"field": "PCTID"}, "output": "x"}]}
+    resp = client.post("/api/jobs", json={"plan": plan, "site_context": SITE_CONTEXT})
+    body = resp.json()
+    assert body["state"] == "error"
+    assert any("requires params.values" in e for e in body["errors"])
 
 
 def test_create_job_rejects_unknown_input_reference_at_validation():
@@ -210,3 +234,86 @@ def test_buffer_distance_is_real_metres_not_raw_degrees():
     # within a fraction of a degree (nowhere near "500 raw degrees").
     assert max(lons) - 151.001 > 0.003  # buffer visibly extends past the original edge
     assert max(lons) - 151.001 < 0.05   # but nothing like treating 500 as degrees
+
+
+@requires_qgis
+def test_reclassify_recodes_mapped_values_and_flags_unmapped():
+    from app.gis_worker import reclassify
+
+    fc = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"PCT_ID": 686}, "geometry": {"type": "Polygon", "coordinates": [[[151.0, -33.8], [151.001, -33.8], [151.001, -33.801], [151.0, -33.801], [151.0, -33.8]]]}},
+        {"type": "Feature", "properties": {"PCT_ID": 9999}, "geometry": {"type": "Polygon", "coordinates": [[[151.01, -33.8], [151.011, -33.8], [151.011, -33.801], [151.01, -33.801], [151.01, -33.8]]]}},
+    ]}
+    result = reclassify(fc, "PCT_ID", {"686": 3250})
+    values = sorted(str(f["properties"]["PCT_ID"]) for f in result["features"])
+    assert values == ["3250", "9999"]  # 686 recoded, 9999 left as-is
+    assert result["_unmapped_values"] == ["9999"]
+
+
+@requires_qgis
+def test_merge_with_precedence_lets_overlay_win_on_overlap():
+    from app.gis_worker import merge_with_precedence
+
+    base = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"source": "base"}, "geometry": {"type": "Polygon", "coordinates": [[[151.0, -33.8], [151.002, -33.8], [151.002, -33.802], [151.0, -33.802], [151.0, -33.8]]]}},
+    ]}
+    overlay = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"source": "overlay"}, "geometry": {"type": "Polygon", "coordinates": [[[151.0005, -33.8005], [151.0015, -33.8005], [151.0015, -33.8015], [151.0005, -33.8015], [151.0005, -33.8005]]]}},
+    ]}
+    result = merge_with_precedence(base, overlay)
+    sources = sorted(f["properties"]["source"] for f in result["features"])
+    assert sources == ["base", "overlay"]  # overlay kept whole, base clipped to the remainder - both present
+
+
+@requires_qgis
+def test_chat_with_mocked_ai_proposes_and_executes_a_real_plan(monkeypatch):
+    """Fakes only the Anthropic API call - everything downstream (plan
+    parsing, validation, real PyQGIS execution, results storage) is the
+    real Phase 1 pipeline, exercised through /api/chat exactly as a real
+    model response would drive it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+
+    class FakeBlock:
+        def __init__(self, type_, **kw):
+            self.type = type_
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    class FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return FakeResponse([
+                FakeBlock("text", text="I'll buffer the site and intersect it with the threatened ecological community layer."),
+                FakeBlock("tool_use", input={
+                    "explanation": "Buffered the site by 500m and intersected with TECs.",
+                    "operations": [
+                        {"tool": "buffer", "input": "subject_site", "distance": 500, "units": "metres", "output": "buf500"},
+                        {"tool": "intersection", "input": "threatened_ecological_communities", "overlay": "buf500", "output": "communities_within_site"},
+                    ],
+                }),
+            ])
+
+    class FakeAnthropicClient:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    class FakeAnthropicModule:
+        Anthropic = FakeAnthropicClient
+
+    monkeypatch.setitem(sys.modules, "anthropic", FakeAnthropicModule())
+
+    resp = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "buffer 500m and intersect with the TEC layer"}],
+        "site_context": SITE_CONTEXT,
+        "layer_data": TEC_LAYER_DATA,
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mock"] is False
+    assert body["job"]["state"] == "done", body["job"]
+    assert len(body["results"]["output_layers"]) == 2
+    assert "Buffered the site" in body["reply"]
+    assert "Done." in body["reply"]

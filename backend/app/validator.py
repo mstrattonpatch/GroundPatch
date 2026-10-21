@@ -84,6 +84,13 @@ def validate_plan(plan: GisPlan, site_context: SiteContext) -> ValidationResult:
             elif op.units not in allowed_units:
                 errors.append(f"{prefix}: units '{op.units}' is not valid for '{op.tool}' — one of {sorted(allowed_units)}.")
 
+        if op.tool in ("reclassify", "filter_by_attribute") and not op.params.get("field"):
+            errors.append(f"{prefix}: '{op.tool}' requires params.field.")
+        if op.tool == "reclassify" and not op.params.get("mapping"):
+            errors.append(f"{prefix}: reclassify requires params.mapping (old value -> new value).")
+        if op.tool == "filter_by_attribute" and not op.params.get("values"):
+            errors.append(f"{prefix}: filter_by_attribute requires params.values (a non-empty list).")
+
         if op.output is not None:
             if op.output in seen_outputs or op.output in known_ids:
                 errors.append(f"{prefix}: output id '{op.output}' collides with an earlier operation's output or an existing layer id.")

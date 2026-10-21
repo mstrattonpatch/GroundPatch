@@ -72,6 +72,13 @@ class LayerCatalogueEntry(BaseModel):
     fields: list[str] = Field(default_factory=list)
     status: LayerStatus = LayerStatus.not_queried
     retrieved_at: str | None = None
+    # Up to ~15 distinct values per field, sampled from the real data
+    # client-side. The chat AI needs to see actual attribute content (PCT
+    # codes, condition classes, ...) to do things like build a reclassify
+    # mapping or pick a filter value correctly - a field name alone isn't
+    # enough, same reason the Bonny Hills workflow's first step was
+    # inspecting real layer values before writing anything.
+    sample_values: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SiteContext(BaseModel):
@@ -83,31 +90,17 @@ class SiteContext(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# /api/ai/plan
-# ---------------------------------------------------------------------------
-
-class PlanRequest(BaseModel):
-    request: str = Field(..., description="The user's natural-language request, e.g. the chat message.")
-    site_context: SiteContext
-
-
-class PlanResponse(BaseModel):
-    plan: GisPlan
-    explanation: str
-    mock: bool = Field(True, description="True while planner.py is a stub returning a fixed illustrative plan rather than a real AI-generated one.")
-
-
-# ---------------------------------------------------------------------------
 # /api/jobs and /api/jobs/{job_id}
 # ---------------------------------------------------------------------------
 
 class JobCreateRequest(BaseModel):
     plan: GisPlan
     site_context: SiteContext
-    # /api/ai/plan deliberately only sends lightweight catalogue metadata
-    # (per the proposal: "does not need to send ... every dataset to the
-    # AI") - but *executing* a plan needs real feature geometry for every
-    # layer id an operation references. index.html already holds that data
+    # /api/chat deliberately only sends lightweight catalogue metadata (per
+    # the proposal: "does not need to send ... every dataset to the AI")
+    # for layers that aren't referenced - but *executing* a plan needs real
+    # feature geometry for every layer id an operation references.
+    # index.html already holds that data
     # client-side (lyr.lastGeoJSON per queried layer), so the job-creation
     # request is where it's actually sent, keyed by layer id exactly as
     # they appear in site_context.layers (plus "subject_site" for the
@@ -155,3 +148,36 @@ class LayerFeaturesResponse(BaseModel):
     layer_id: str
     geojson: dict[str, Any]
     mock: bool = True
+
+
+# ---------------------------------------------------------------------------
+# /api/chat — the real conversational entry point. Stateless like every
+# other endpoint here: the caller (index.html) holds conversation history
+# and resends it in full each turn, same pattern its existing "Ask about
+# this site" chat already uses.
+# ---------------------------------------------------------------------------
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(..., description="Full conversation so far, oldest first. The latest user message is the one being responded to.")
+    site_context: SiteContext
+    # Every currently-available layer's real GeoJSON, not just ones a prior
+    # turn referenced - the model doesn't know in advance what it'll need
+    # to look at or act on, so (unlike /api/jobs, which only needs the
+    # layers a specific plan references) this sends everything queried so
+    # far. Known inefficiency for sites with a lot of fetched data; revisit
+    # if/when payload size becomes a real problem rather than guessing at
+    # it now.
+    layer_data: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class ChatResponse(BaseModel):
+    reply: str = Field(..., description="The assistant's chat message - either a question/explanation with no action taken, or a summary of what it just did.")
+    plan: GisPlan | None = Field(None, description="The plan the AI proposed, if any, regardless of whether it executed successfully.")
+    job: JobStatusResponse | None = Field(None, description="Present only if a plan was proposed and actually executed this turn.")
+    results: JobResultsResponse | None = None
+    mock: bool = Field(False, description="True if ANTHROPIC_API_KEY isn't configured and this is a canned fallback reply, not a real model response.")

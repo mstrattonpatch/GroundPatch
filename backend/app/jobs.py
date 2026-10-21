@@ -55,6 +55,12 @@ def _run_operation(tool: str, op, layer_store: dict[str, dict]) -> dict:
         return run_on_qgis_thread(fn, input_geojson, op.units)
     if tool == "calculate_distance":
         return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay])
+    if tool == "reclassify":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("field"), op.params.get("mapping", {}))
+    if tool == "merge_with_precedence":
+        return run_on_qgis_thread(fn, input_geojson, layer_store[op.overlay])
+    if tool == "filter_by_attribute":
+        return run_on_qgis_thread(fn, input_geojson, op.params.get("field"), op.params.get("values", []))
     raise AssertionError(f"_run_operation doesn't know how to call tool '{tool}' — add a case above (validator.py already restricts tool to APPROVED_TOOLS, so reaching here means a new tool was added to gis_worker without updating this dispatch).")
 
 
@@ -111,6 +117,15 @@ def create_job(request: JobCreateRequest) -> JobStatusResponse:
             )
             storage.save_job(job)
             return job
+
+        # reclassify() flags any value it couldn't find in the mapping via a
+        # reserved _unmapped_values key (see its docstring) - surface that
+        # as a job warning rather than silently storing it as part of the
+        # layer's own GeoJSON.
+        unmapped = result_geojson.pop("_unmapped_values", None)
+        if unmapped:
+            preview = ", ".join(unmapped[:10]) + ("…" if len(unmapped) > 10 else "")
+            validation.warnings.append(f"operation[{i}] ({op.tool}): {len(unmapped)} value(s) not in the mapping, left unchanged: {preview}")
 
         output_id = op.output or op.input  # tools like calculate_area that annotate rather than create write back onto their own input id if the plan didn't name an output
         layer_store[output_id] = result_geojson
