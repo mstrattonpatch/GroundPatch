@@ -7,19 +7,19 @@
 #   conda env create -f environment-qgis.yml
 #   conda activate groundpatch-gis
 #
-# Pin the qgis version explicitly once Phase 1 implementation starts — left
-# unpinned here only because the exact version to standardise on hasn't been
-# decided yet. Pin it the moment that decision is made; an unpinned QGIS
+# Pinned to the QGIS version Phase 1 was actually built and verified
+# against (see backend/README.md's "Verified" section) — an unpinned QGIS
 # version is exactly the kind of drift that silently changes Processing
-# algorithm behaviour between dev and whatever this eventually deploys to.
+# algorithm behaviour between dev and whatever this deploys to.
 name: groundpatch-gis
 channels:
   - conda-forge
 dependencies:
   - python=3.11
-  - qgis
+  - qgis=3.44.*
   - pip
   - pip:
       - fastapi==0.115.6
       - uvicorn[standard]==0.34.0
       - pydantic==2.10.4
+      - anthropic==1.17.0

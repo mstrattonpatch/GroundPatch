@@ -255,6 +255,34 @@ heavier, conda-only footprint.
   queries, exports, the existing QGIS script, the automated report) are
   untouched — this backend is additive.
 
+## Deploying (Render)
+
+`Dockerfile` builds the whole `groundpatch-gis` conda environment (real
+PyQGIS, not a pip stand-in) into one image, and `../render.yaml` is a
+Render Blueprint pointing at it — so Render can build and run this
+directly from the GitHub repo rather than configuring it by hand.
+
+1. On [render.com](https://render.com), **New → Blueprint**, pick this repo.
+   Render reads `render.yaml`, finds the `groundpatch-ai-gis-backend`
+   service (Docker runtime, rooted at `backend/`), and proposes it.
+2. Before the first deploy, set the two secrets it leaves blank
+   (`sync: false` in `render.yaml` means Render won't invent a value or put
+   one in the repo — you type it directly into the dashboard):
+   - `ANTHROPIC_API_KEY` — required; without it `/api/chat` only returns
+     the mock "no AI configured" reply.
+   - `ANTHROPIC_MODEL` — optional; leave blank to use the default
+     (`claude-sonnet-5-5`).
+3. Deploy. The first build installs QGIS via conda-forge, which is slow
+   (several minutes) — normal, not stuck. Render's health check hits
+   `/health`, same endpoint used throughout development.
+4. Once live, copy the service's `https://...onrender.com` URL into
+   `index.html`'s "AI GIS analysis" panel's **Backend URL** field (saved in
+   that browser's `localStorage`, so it only needs doing once per browser).
+
+The free plan spins the service down after inactivity and takes a bit to
+wake back up on the next request — expected, not a bug, if the first chat
+message after a while takes longer than usual.
+
 ## Running it locally
 
 ```

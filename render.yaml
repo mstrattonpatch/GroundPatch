@@ -1,0 +1,16 @@
+# Render Blueprint — lets Render deploy backend/ as a Docker web service
+# straight from this repo instead of configuring it by hand in the
+# dashboard. See backend/README.md's "Deploying" section.
+services:
+  - type: web
+    name: groundpatch-ai-gis-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
