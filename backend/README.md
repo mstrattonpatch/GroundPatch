@@ -2,9 +2,16 @@
 
 **Phase 1 is implemented and verified against real QGIS** (not mocked, not
 just written — see "Verified" below for exactly what was run and what came
-back). Phase 2 (multi-step chaining is already supported — see below —
-map/legend sync in `index.html`), Phase 3 (QGIS project generation) and
-Phase 4 (production readiness) are not.
+back). **Phase 2's core loop is also wired up**: `index.html` now has an
+"AI GIS analysis" sidebar section that builds a plan, calls this backend,
+and renders the resulting layer(s) on the map with toggle/zoom/export
+controls — see its own commit message for what was verified (the exact
+request/response contract, against the real running service) and what
+wasn't (no browser available in the dev sandbox this was built in, so the
+UI itself has never been visually exercised). `/api/ai/plan` is still a
+stub (no real AI call), so the plan is built through a structured form, not
+free-text chat. Phase 3 (QGIS project generation) and Phase 4 (production
+readiness) are not started.
 
 ## Why this exists
 
@@ -17,25 +24,26 @@ style → QGIS project) — that needs a proper GIS engine, which means a
 backend.
 
 The goal is to **extend** GroundPatch, not replace it: the browser stays the
-map/UI, this backend is a service the chat panel can ask to run an analysis,
-the result comes back as GeoJSON and gets added to the existing layer
-registry/legend like any other layer. `index.html` itself is not wired up to
-call this backend yet — that integration (the actual chat-panel "processing
-mode", sending the layer catalogue + feature data, rendering the result on
-the map) is still open work, separate from the backend being real.
+map/UI, this backend is a service a sidebar panel asks to run an analysis,
+the result comes back as GeoJSON and gets added to the map with its own
+toggle/zoom/export controls. `index.html` now has an "AI GIS analysis"
+section that does exactly this (see its own commit) — built as a structured
+operation form rather than the proposal's free-text chat, since
+`/api/ai/plan` is still a stub and a chat box over a stub would be
+misleading.
 
 ## Architecture
 
 ```
 index.html (existing)          backend/ (this directory)
 ┌─────────────────────┐        ┌──────────────────────────────────────┐
-│ Leaflet map          │  HTTP  │ FastAPI app (app/main.py)             │
-│ Layer registry/legend│◄──────►│   - POST /api/ai/plan      [stub]     │
-│ Chat panel            │       │   - POST /api/jobs          [real]    │
-│ (buildSiteContext())  │       │   - GET  /api/jobs/{id}      [real]   │
-└─────────────────────┘        │   - GET  /api/jobs/{id}/results [real]│
-   not wired up to the          │   - GET  /api/jobs/{id}/layers/{lid}  │
-   backend yet                  │                              [real]  │
+│ Leaflet map           │  HTTP │ FastAPI app (app/main.py)             │
+│ Layer registry         │◄────►│   - POST /api/ai/plan      [stub]     │
+│ "AI GIS analysis" panel│      │   - POST /api/jobs          [real]    │
+│ (structured plan        │     │   - GET  /api/jobs/{id}      [real]   │
+│  builder, not chat)      │    │   - GET  /api/jobs/{id}/results [real]│
+└─────────────────────┘        │   - GET  /api/jobs/{id}/layers/{lid}  │
+                                │                              [real]  │
                                 │   - GET  /api/jobs/{id}/project [stub]│
                                 │                                        │
                                 │ app/planner.py   — AI planning  [stub] │
@@ -192,17 +200,20 @@ heavier, conda-only footprint.
    *sequence* of operations, each able to reference an earlier one's
    `output`) — the proposal lists chaining under Phase 2, but it fell out
    naturally from how `jobs.py` executes a plan and didn't need separate
-   work. **Not done**: `index.html`'s chat panel doesn't call this backend
-   yet — there's no live deployment this points at, and no UI changes have
-   been made for a "processing mode," sending the layer catalogue, or
-   rendering a job's resulting layer on the map. `/api/ai/plan` is still a
-   stub (no real AI call).
-2. **Phase 2 — map/legend sync.** The multi-step chaining part is already
-   covered by Phase 1's implementation (see above). What's left: add
-   output layers to `index.html`'s actual layer list/legend/visibility
-   controls, a stats table, previews/confirmation before a job runs,
-   cancellation, and persisting results so a page refresh doesn't lose an
-   analysis — all `index.html`-side work, none of it started.
+   work.
+2. **Phase 2 — map sync.** ✅ core loop. `index.html`'s "AI GIS analysis"
+   section builds a plan (structured form, not chat — `/api/ai/plan` is
+   still a stub), sends the layer catalogue + real feature data, and
+   renders every output layer on the map with its own toggle/zoom/export
+   row. Verified: the exact request/response contract, against the real
+   running backend (see that commit's message) — **not** verified: the
+   actual browser UI, since no browser is available in the sandbox this
+   was built in. **Not done**: a stats table, confirmation before an
+   expensive job runs, cancellation, and persisting a job's results past a
+   page refresh (today a refresh just loses the AI-generated layers, same
+   as it would for anything else not in the saved session — the backend's
+   own storage is in-memory and ephemeral anyway, so there's nothing
+   durable to resume against yet regardless of what `index.html` does).
 3. **Phase 3 — QGIS project generation.** Not started. `project_builder.py`
    is a stub; see its docstring for the implementation plan and the output
    ZIP shape (`.qgz` + `.gpkg` + `analysis_summary.csv` +
