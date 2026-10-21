@@ -310,6 +310,16 @@
   .badge.hit{ background:var(--moss-soft); color:var(--moss); }
   .badge.miss{ background:#eee; color:var(--ink-soft); }
   .badge.err{ background:#f4dcdc; color:var(--red); }
+  .badge.warn{ background:#faecd0; color:#8a5a00; }
+  .dc-row{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .dc-row:last-child{ border-bottom:none; }
+  .dc-row .dc-name{ flex:1; }
+  .dc-row .dc-meta{ color:var(--ink-soft); font-size:11px; }
+  .cs-row{ display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--line); }
+  .cs-row:last-child{ border-bottom:none; }
+  .cs-row .cs-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cs-row .cs-ha{ font-variant-numeric:tabular-nums; color:var(--ink-soft); min-width:80px; text-align:right; }
+  .cs-row .cs-pct{ font-variant-numeric:tabular-nums; font-weight:600; min-width:50px; text-align:right; }
 
   #reportBox{
     white-space:pre-wrap;
@@ -797,6 +807,17 @@
     <section id="resultsSection" style="display:none;">
       <h2>Layer results</h2>
       <div id="results"></div>
+    </section>
+
+    <section id="dataCompletenessSection" style="display:none;">
+      <h2>Data completeness</h2>
+      <div id="dataCompletenessPanel" style="font-size:12px;"></div>
+    </section>
+
+    <section id="constraintsStatsSection" style="display:none;">
+      <h2>Constraints area summary</h2>
+      <button class="secondary" id="calcConstraintsStats">Calculate area statistics</button>
+      <div id="constraintsStatsPanel" style="margin-top:10px;font-size:12px;"></div>
     </section>
 
     <section id="reportSection" style="display:none;">
@@ -2860,47 +2881,26 @@ document.getElementById('attrTableModal').addEventListener('click', e=>{
   if(e.target.id === 'attrTableModal') document.getElementById('attrTableModal').classList.remove('show');
 });
 
-async function runAll(){
-  if(!boundaryGeom) return;
-  // Conditional layers (e.g. Soil Landscapes) are tested every run regardless of
-  // their checkbox — they only get switched on if they actually intersect the buffer.
-  const active = layers.filter(l=>(l.on || l.conditional) && !l.derived);
-  document.getElementById('loadingOverlay').classList.add('show');
-  try{
-
-  // Clear every layer's previous render, however many category sub-layers it had
-  layers.forEach(l=>{ if(l.mapLayerGroup){ map.removeLayer(l.mapLayerGroup); l.mapLayerGroup = null; } });
-
-  const resultsEl = document.getElementById('results');
-  resultsEl.innerHTML = '';
-  document.getElementById('resultsSection').style.display = 'block';
-
-  const reportLines = [];
-  const ha = polygonAreaHa(boundaryGeom);
-  reportLines.push('SITE CONSTRAINTS SUMMARY');
-  reportLines.push('Generated: ' + new Date().toLocaleString());
-  reportLines.push('Approx. site area: ' + ha.toFixed(2) + ' ha');
-  reportLines.push(`Buffers: ${ASSESSMENT_BUFFER_KM}km rounded (ecology/planning layers), ${CONTEXT_BUFFER_KM*1000}m rounded (cadastre, context only) — all layers queried and clipped to their respective extent`);
-  reportLines.push('');
-
-  // Every layer is an independent request to (usually) a different government
-  // service, so there's no reason to make one wait for the previous one to
-  // finish — querying them all concurrently turns total wait time from the
-  // SUM of every layer's response time into the time of the SLOWEST one.
-  // Cards are created up front, in the same order as `active`, so the layout
-  // stays stable regardless of which query actually finishes first; each
-  // card is then filled in by processLayer() once its own query settles.
-  const cards = active.map(lyr=>{
-    const card = document.createElement('div');
+// Hoisted to module scope (not nested inside runAll()) so a single failed
+// layer's "Retry" button can re-run just that one query, without having to
+// re-run "Fetch site data" for every layer again. Tracks lyr.queryStatus
+// ('complete' | 'partial' | 'failed') and lyr.retrievedAt (ISO timestamp of
+// this attempt, success or failure) on every call, so the data-completeness
+// panel always reflects the most recent attempt per layer, including after
+// an individual retry.
+function wireRetryButton(card, lyr){
+  const btn = card.querySelector('[data-retry]');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
     card.className = 'result-card';
-    card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge" style="margin-left:auto;">querying…</span></div>`;
-    resultsEl.appendChild(card);
-    return card;
+    card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge" style="margin-left:auto;">retrying…</span></div>`;
+    processLayer(lyr, card).then(()=>{ renderDataCompletenessPanel(); updateMapLegend(); });
   });
-  const layerReportLines = await Promise.all(active.map((lyr, i) => processLayer(lyr, cards[i])));
-  reportLines.push(...layerReportLines);
+}
 
-  async function processLayer(lyr, card){
+async function processLayer(lyr, card){
+  let status = 'failed';
+  try{
     try{
       const rawGj = await queryLayer(lyr);
       let gj = clipFeatureCollection(rawGj, bufferGeomFor(lyr));
@@ -2920,6 +2920,7 @@ async function runAll(){
           // (re-enabled below once features are found), so turning this off
           // here is safe - it never needs to survive to the next query.
           lyr.on = false;
+          status = 'complete';
           card.classList.add('empty');
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">not present</span></div>
                              <div class="rc-body">Does not intersect the ${ASSESSMENT_BUFFER_KM}km buffer — omitted as a conditional layer (map plate not required).</div>`;
@@ -2937,12 +2938,16 @@ async function runAll(){
           const fetchFailedDespiteMatch = gj.idsFound > 0;
           card.classList.add('empty');
           if(fetchFailedDespiteMatch){
+            status = 'failed';
             card.classList.remove('empty');
             card.classList.add('error');
             card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge err" style="margin-left:auto;">fetch failed</span></div>
-                               <div class="rc-body">The server matched ${gj.idsFound} feature${gj.idsFound>1?'s':''} against the ${ASSESSMENT_BUFFER_KM}km buffer, but fetching ${gj.idsFound>1?'their details':'its details'} failed. This isn't "no intersect" — retry, or check the connection to the proxy.</div>`;
+                               <div class="rc-body">The server matched ${gj.idsFound} feature${gj.idsFound>1?'s':''} against the ${ASSESSMENT_BUFFER_KM}km buffer, but fetching ${gj.idsFound>1?'their details':'its details'} failed. This isn't "no intersect".
+                               <button class="textbtn" data-retry style="margin-top:6px;">Retry this layer</button></div>`;
+            wireRetryButton(card, lyr);
             return `${lyr.name}: ${gj.idsFound} feature(s) matched but detail fetch failed`;
           }
+          status = 'complete';
           card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">no intersect</span></div>
                              <div class="rc-body">No features of this layer intersect the ${ASSESSMENT_BUFFER_KM}km buffer.</div>`;
           return `${lyr.name}: no intersecting features`;
@@ -2950,6 +2955,7 @@ async function runAll(){
       }
       if(lyr.conditional) lyr.on = true;
       lyr.visible = true;
+      status = (gj.truncated || gj.partial || gj.unpaginatedFallback) ? 'partial' : 'complete';
 
       // Categorical colouring — explicit colorMap wins when a layer defines one
       // (GDE High/Medium/Low, Strahler order 1-6); otherwise one colour per
@@ -3059,12 +3065,90 @@ async function runAll(){
       return `${lyr.name}: ${n} intersecting feature(s)${categoryCount>1?` across ${categoryCount} classes`:''}${gj.truncated?' [TRUNCATED at 20,000 — safety cap hit]':''}${gj.partial?' [PARTIAL — some data failed to load]':''}${gj.unpaginatedFallback?` [UNPAGINATED FALLBACK — may be capped — reason: ${gj.unpaginatedFallbackReason || 'unknown'}]`:''} — ${uniqueVals || 'see attributes'}`;
 
     }catch(err){
+      status = 'failed';
       card.classList.add('error');
       card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge err" style="margin-left:auto;">error</span></div>
-                         <div class="rc-body">Could not reach this layer (${err.message}). This is usually a CORS or network restriction on the endpoint, not a problem with the boundary.</div>`;
+                         <div class="rc-body">Could not reach this layer (${err.message}). This is usually a CORS or network restriction on the endpoint, not a problem with the boundary.
+                         <button class="textbtn" data-retry style="margin-top:6px;">Retry this layer</button></div>`;
+      wireRetryButton(card, lyr);
       return `${lyr.name}: could not be queried (${err.message})`;
     }
+  }finally{
+    lyr.queryStatus = status;
+    lyr.retrievedAt = new Date().toISOString();
   }
+}
+
+function statusBadgeHtml(status){
+  if(status === 'complete') return '<span class="badge hit">complete</span>';
+  if(status === 'partial') return '<span class="badge warn">partial</span>';
+  if(status === 'failed') return '<span class="badge err">failed</span>';
+  return '<span class="badge miss">not queried</span>';
+}
+
+// Every active/conditional layer's last attempt in one place - status,
+// when it was last (re)fetched, and where it came from - rather than
+// having to scan every result card individually. Also the one place that
+// still shows a layer which was retried on its own (its timestamp/status
+// update independently of the rest of the run that way).
+function renderDataCompletenessPanel(){
+  const section = document.getElementById('dataCompletenessSection');
+  const panel = document.getElementById('dataCompletenessPanel');
+  const relevant = layers.filter(l => l.on || l.conditional || l.queryStatus);
+  if(!relevant.length){ section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  panel.innerHTML = relevant.map(lyr=>{
+    const status = lyr.queryStatus || 'not queried';
+    const when = lyr.retrievedAt ? new Date(lyr.retrievedAt).toLocaleString() : '—';
+    const sourceUrl = lyr.url || (lyr.derived ? `(derived from ${lyr.sourceLayer})` : '—');
+    return `<div class="dc-row">
+      <span class="dc-name">${lyr.name}</span>
+      ${statusBadgeHtml(status)}
+      <span class="dc-meta">${when}</span>
+    </div>
+    <div class="dc-meta" style="padding:0 0 6px;word-break:break-all;">${sourceUrl}</div>`;
+  }).join('');
+}
+
+async function runAll(){
+  if(!boundaryGeom) return;
+  // Conditional layers (e.g. Soil Landscapes) are tested every run regardless of
+  // their checkbox — they only get switched on if they actually intersect the buffer.
+  const active = layers.filter(l=>(l.on || l.conditional) && !l.derived);
+  document.getElementById('loadingOverlay').classList.add('show');
+  try{
+
+  // Clear every layer's previous render, however many category sub-layers it had
+  layers.forEach(l=>{ if(l.mapLayerGroup){ map.removeLayer(l.mapLayerGroup); l.mapLayerGroup = null; } });
+
+  const resultsEl = document.getElementById('results');
+  resultsEl.innerHTML = '';
+  document.getElementById('resultsSection').style.display = 'block';
+
+  const reportLines = [];
+  const ha = polygonAreaHa(boundaryGeom);
+  reportLines.push('SITE CONSTRAINTS SUMMARY');
+  reportLines.push('Generated: ' + new Date().toLocaleString());
+  reportLines.push('Approx. site area: ' + ha.toFixed(2) + ' ha');
+  reportLines.push(`Buffers: ${ASSESSMENT_BUFFER_KM}km rounded (ecology/planning layers), ${CONTEXT_BUFFER_KM*1000}m rounded (cadastre, context only) — all layers queried and clipped to their respective extent`);
+  reportLines.push('');
+
+  // Every layer is an independent request to (usually) a different government
+  // service, so there's no reason to make one wait for the previous one to
+  // finish — querying them all concurrently turns total wait time from the
+  // SUM of every layer's response time into the time of the SLOWEST one.
+  // Cards are created up front, in the same order as `active`, so the layout
+  // stays stable regardless of which query actually finishes first; each
+  // card is then filled in by processLayer() once its own query settles.
+  const cards = active.map(lyr=>{
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge" style="margin-left:auto;">querying…</span></div>`;
+    resultsEl.appendChild(card);
+    return card;
+  });
+  const layerReportLines = await Promise.all(active.map((lyr, i) => processLayer(lyr, cards[i])));
+  reportLines.push(...layerReportLines);
 
   // Second pass: derived layers (e.g. the Strahler-order riparian buffer) —
   // computed client-side from another layer's results, no API call of its own.
@@ -3077,6 +3161,8 @@ async function runAll(){
       const source = layers.find(l=>l.name === lyr.sourceLayer);
       if(!source || !source.lastGeoJSON || !source.lastGeoJSON.features.length){
         lyr.lastGeoJSON = null;
+        lyr.queryStatus = 'complete'; // correctly determined there's nothing to buffer, not a failure
+        lyr.retrievedAt = new Date().toISOString();
         card.classList.add('empty');
         card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge miss" style="margin-left:auto;">no source data</span></div>
                            <div class="rc-body">Needs "${lyr.sourceLayer}" to have returned features first.</div>`;
@@ -3112,8 +3198,12 @@ async function runAll(){
       });
 
       reportLines.push(`${lyr.name}: ${n} dissolved corridor polygon(s) generated from ${lyr.sourceLayer} (10/20/30/40m by order, dissolved per order)`);
+      lyr.queryStatus = 'complete';
+      lyr.retrievedAt = new Date().toISOString();
     }catch(derivedErr){
       lyr.lastGeoJSON = null;
+      lyr.queryStatus = 'failed';
+      lyr.retrievedAt = new Date().toISOString();
       card.classList.add('error');
       card.innerHTML = `<div class="rc-head"><span class="swatch" style="background:${lyr.color}"></span>${lyr.name}<span class="badge err" style="margin-left:auto;">error</span></div>
                          <div class="rc-body">Could not build this layer (${derivedErr.message}).</div>`;
@@ -3131,6 +3221,10 @@ async function runAll(){
 
   document.getElementById('reportSection').style.display = 'block';
   document.getElementById('reportBox').textContent = reportLines.join('\n');
+
+  renderDataCompletenessPanel();
+  document.getElementById('constraintsStatsSection').style.display = 'block';
+  document.getElementById('constraintsStatsPanel').innerHTML = '';
 
   renderLayerList();
   renderExportList();
