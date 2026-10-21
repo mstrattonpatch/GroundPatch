@@ -1,10 +1,10 @@
-# GroundPatch AI GIS backend (scaffold)
+# GroundPatch AI GIS backend
 
-This is a **structural scaffold only** — directory layout, endpoint stubs, data
-models, and this design doc. None of the GIS logic is implemented yet; nothing
-here runs a real spatial operation. It exists so the shape of the system is
-settled and testable against `index.html` before the real work (Phase 1 in
-the plan below) is built.
+**Phase 1 is implemented and verified against real QGIS** (not mocked, not
+just written — see "Verified" below for exactly what was run and what came
+back). Phase 2 (multi-step chaining is already supported — see below —
+map/legend sync in `index.html`), Phase 3 (QGIS project generation) and
+Phase 4 (production readiness) are not.
 
 ## Why this exists
 
@@ -19,7 +19,10 @@ backend.
 The goal is to **extend** GroundPatch, not replace it: the browser stays the
 map/UI, this backend is a service the chat panel can ask to run an analysis,
 the result comes back as GeoJSON and gets added to the existing layer
-registry/legend like any other layer.
+registry/legend like any other layer. `index.html` itself is not wired up to
+call this backend yet — that integration (the actual chat-panel "processing
+mode", sending the layer catalogue + feature data, rendering the result on
+the map) is still open work, separate from the backend being real.
 
 ## Architecture
 
@@ -27,145 +30,187 @@ registry/legend like any other layer.
 index.html (existing)          backend/ (this directory)
 ┌─────────────────────┐        ┌──────────────────────────────────────┐
 │ Leaflet map          │  HTTP  │ FastAPI app (app/main.py)             │
-│ Layer registry/legend│◄──────►│   - POST /api/ai/plan                 │
-│ Chat panel            │       │   - POST /api/jobs                    │
-│ (buildSiteContext())  │       │   - GET  /api/jobs/{id}                │
-└─────────────────────┘        │   - GET  /api/jobs/{id}/results        │
-                                │   - GET  /api/jobs/{id}/layers/{lid}   │
-                                │   - GET  /api/jobs/{id}/project        │
+│ Layer registry/legend│◄──────►│   - POST /api/ai/plan      [stub]     │
+│ Chat panel            │       │   - POST /api/jobs          [real]    │
+│ (buildSiteContext())  │       │   - GET  /api/jobs/{id}      [real]   │
+└─────────────────────┘        │   - GET  /api/jobs/{id}/results [real]│
+   not wired up to the          │   - GET  /api/jobs/{id}/layers/{lid}  │
+   backend yet                  │                              [real]  │
+                                │   - GET  /api/jobs/{id}/project [stub]│
                                 │                                        │
-                                │ app/planner.py   — AI planning layer   │
+                                │ app/planner.py   — AI planning  [stub] │
                                 │ app/validator.py — plan validation     │
-                                │ app/jobs.py      — job lifecycle/queue │
+                                │ app/jobs.py      — job lifecycle       │
+                                │ app/qgis_runtime.py — QGIS boot/thread │
                                 │ app/gis_worker.py— PyQGIS execution    │
-                                │ app/project_builder.py — .qgz package  │
+                                │ app/project_builder.py — .qgz   [stub] │
                                 │ app/storage.py   — job/result storage  │
                                 └──────────────────────────────────────┘
 ```
 
-**The AI plans, the GIS engine executes.** The AI (`app/planner.py`) turns a
-natural-language request into a structured JSON plan — a list of named
-operations from a fixed, approved catalogue (buffer, clip, intersection,
-dissolve, calculate_area, ...). It never generates or runs arbitrary Python.
-`app/validator.py` checks that plan against the actual site/layer catalogue
-(inputs exist, CRS and units make sense, every tool is on the approved list)
-before anything executes. Only `app/gis_worker.py` touches real geometry, and
-only through QGIS Processing algorithms, not ad hoc code.
+**The AI plans, the GIS engine executes.** The AI (`app/planner.py` — still
+a stub, see below) turns a natural-language request into a structured JSON
+plan — a list of named operations from a fixed, approved catalogue (buffer,
+clip, intersection, dissolve, calculate_area, calculate_distance). It never
+generates or runs arbitrary Python. `app/validator.py` checks that plan
+against the actual site/layer catalogue (inputs exist, every tool is on the
+approved list, units are valid for that specific tool) before anything
+executes — real logic, not a stub. Only `app/gis_worker.py` touches real
+geometry, and only through QGIS Processing algorithms, not ad hoc code.
 
-### Example plan (illustrative — matches the shape `app/models.py` defines)
+### Example plan (the exact shape `app/models.py` defines, and what Phase 1 actually runs)
 
 ```json
 {
   "operations": [
     { "tool": "buffer", "input": "subject_site", "distance": 500, "units": "metres", "output": "assessment_buffer_500m" },
-    { "tool": "intersection", "input": "threatened_ecological_communities", "overlay": "subject_site", "output": "communities_within_site" },
+    { "tool": "intersection", "input": "threatened_ecological_communities", "overlay": "assessment_buffer_500m", "output": "communities_within_site" },
     { "tool": "calculate_area", "input": "communities_within_site", "units": "hectares" }
   ]
 }
 ```
 
+This is the proposal's own illustrative plan — "create a 500m buffer,
+intersect with threatened ecological communities, calculate area in
+hectares" — and it is now genuinely executable; see "Verified" below for the
+exact request/response.
+
 A plan is a *request*, not an authority — the validator decides what's
 actually safe to run, and "500 metres" is resolved against an appropriate
-projected CRS (never 500 raw units of whatever CRS the source layer happens
-to be in) before the buffer tool runs.
+UTM CRS computed from the input's own location (never 500 raw EPSG:4326
+degrees) before the buffer tool runs — see `qgis_worker.APPROVED_TOOLS`'s
+comment for the two algorithm IDs that turned out to differ from the
+proposal's wording once checked against a real QGIS install, and
+`test_buffer_distance_is_real_metres_not_raw_degrees` for the regression
+test on this specific footgun.
 
 ## GIS engine: PyQGIS
 
-This scaffold targets **real PyQGIS** (QGIS's own Python bindings and
-Processing framework), not a lighter pure-Python stack — chosen so the
-worker can call actual QGIS Processing algorithms (`native:buffer`,
-`native:intersection`, `native:dissolve`, ...) and build the output project
-with QGIS's own project API, matching the proposal exactly.
+Real PyQGIS (QGIS's own Python bindings and Processing framework), not a
+lighter pure-Python stack — chosen so the worker calls actual QGIS
+Processing algorithms and can build the output project with QGIS's own
+project API (Phase 3) later, matching the proposal.
 
 **This has a real consequence: PyQGIS is not pip-installable.** It ships
-with a full QGIS install and isn't on PyPI. Running `app/gis_worker.py` for
-real requires one of:
+with a full QGIS install and isn't on PyPI. `environment-qgis.yml` is a
+conda-forge spec for it — this is exactly what was used to verify Phase 1
+(see "Verified" below), not a guess:
 
-- **conda-forge** (simplest on a dev machine): `conda create -n groundpatch-gis -c conda-forge qgis` — gives you `qgis.core`, `qgis.analysis`, `qgis.processing` in that environment's Python.
-- **The official Docker image**: `qgis/qgis` (https://hub.docker.com/r/qgis/qgis) already has PyQGIS and a headless `QgsApplication` set up — the natural base image for `backend/Dockerfile` once this is built out.
-- **OS packages** on Debian/Ubuntu: `apt install qgis python3-qgis` (version is whatever's in that distro's repos — pin carefully).
+```
+conda env create -f environment-qgis.yml
+conda activate groundpatch-gis
+```
 
-None of these are available in a plain `pip install -r requirements.txt` in
-a generic Python environment, which is why `requirements.txt` only covers
-the orchestration layer (FastAPI, Pydantic, uvicorn) and
-`environment-qgis.yml` is a separate conda spec for the worker. Keep that
-split even once this is built out — don't let the two halves merge into one
-unpinned environment, since that makes the worker (the part that actually
-matters for reproducible results) harder to pin precisely.
+`conda activate` sets `PYTHONPATH` (to `share/qgis/python` and
+`share/qgis/python/plugins`, where conda-forge installs the `qgis` and
+`processing` packages — NOT regular site-packages) and `QT_PLUGIN_PATH`
+automatically via the env's own activation hooks — don't set those by hand.
+The one thing it does NOT set, and that a headless server needs explicitly,
+is:
+
+```
+export QT_QPA_PLATFORM=offscreen
+```
+
+Without it, `QgsApplication.initQgis()` fails trying to connect to an X
+display that doesn't exist on a server. (A `(PDAL Error) Can't load
+library ... libhdf5_cpp.so` message on startup is harmless — an optional
+point-cloud plugin this install doesn't have a dependency for, unrelated to
+vector operations.)
+
+`requirements.txt` only covers the orchestration layer (FastAPI, Pydantic,
+uvicorn) — install it with plain pip in *any* Python environment, including
+inside `groundpatch-gis` itself (that's what running the app for real
+needs: QGIS from conda, FastAPI from pip, same environment). The app and
+its tests import and run fine with no QGIS at all too (see "Two
+environments" below) — only calling a `gis_worker` tool function actually
+needs `qgis.core` importable.
+
+### Thread affinity — the non-obvious part
+
+QGIS/Qt objects are thread-affine: `QgsApplication` must be initialised on,
+and every `qgis.*` call must happen on, the *same* OS thread for the whole
+process. FastAPI's threadpool for sync endpoints does not guarantee that —
+anyio reuses idle worker threads opportunistically, so a request or two in
+a row often lands on the same thread by chance, which is exactly how this
+went unnoticed at first. It was caught for real: two QGIS-calling requests
+back to back through FastAPI's `TestClient` deadlocked once the second one
+landed on a different threadpool thread than the first had initialised
+`QgsApplication` on (full thread dump captured in this repo's own dev
+session). Fixed by routing every `gis_worker` call through a single
+dedicated worker thread (`qgis_runtime._qgis_executor`,
+`run_on_qgis_thread()`) that `jobs.py` always dispatches through, rather
+than calling tool functions directly. If `gis_worker.py` grows new call
+sites outside `jobs.py`, route them through `run_on_qgis_thread()` too —
+calling `qgis.*` directly from a FastAPI request handler is exactly the bug
+that was just fixed.
 
 ## Directory layout
 
 ```
 backend/
-  README.md              — this file
-  requirements.txt        — orchestration layer only (FastAPI/uvicorn/pydantic) — plain pip
-  environment-qgis.yml    — conda-forge spec for the PyQGIS worker environment
+  README.md               — this file
+  requirements.txt         — orchestration layer only (FastAPI/uvicorn/pydantic) — plain pip
+  requirements-dev.txt      — + pytest/httpx, for running the test suite
+  environment-qgis.yml       — conda-forge spec for the PyQGIS worker environment
   app/
     __init__.py
-    main.py               — FastAPI app, route stubs for the 6 endpoints
-    models.py              — Pydantic models: the plan schema, job status, layer catalogue entry
-    planner.py             — AI planning layer stub (natural language -> structured plan)
-    validator.py           — plan validation stub (approved-tool whitelist, CRS/unit checks)
-    jobs.py                 — in-memory job lifecycle stub (queued/running/done/error)
-    gis_worker.py           — PyQGIS operation stubs, one per approved tool
-    project_builder.py      — .qgz/.gpkg package assembly stub
-    storage.py               — job/result storage stub (filesystem for now; PostGIS is a later option)
+    main.py                — FastAPI app, the 6 endpoints
+    models.py               — Pydantic models: the plan schema, job status, layer catalogue entry
+    planner.py              — AI planning layer [STUB — no AI call wired in yet]
+    validator.py            — plan validation [real]
+    jobs.py                  — job lifecycle: validates, then executes via gis_worker [real]
+    qgis_runtime.py           — QgsApplication/Processing bootstrap, GeoJSON<->layer conversion, the single QGIS worker thread
+    gis_worker.py             — the 7 approved tools, each a real QGIS Processing call [real]
+    project_builder.py        — .qgz/.gpkg package assembly [STUB — Phase 3]
+    storage.py                 — job/result storage (in-memory for now; PostGIS is a later option)
   tests/
     __init__.py
-    test_api_contract.py    — smoke tests against the mocked endpoint responses (no QGIS needed)
+    test_api_contract.py      — validation tests (any environment) + real-execution tests (needs QGIS, auto-skip otherwise)
 ```
 
-## What's actually wired up right now
+## Two environments, on purpose
 
-- `app/main.py` boots as a real FastAPI app (verified running in this
-  sandbox with `uvicorn`) and every endpoint from the proposal's table
-  responds — but with **mocked, clearly-labelled fake data**
-  (`"mock": true` in every response), not a real computed result. This is
-  deliberate: it gives the `index.html` chat-panel integration a stable
-  contract to develop and test against immediately, without needing a real
-  QGIS environment stood up first.
-- `app/gis_worker.py` defines the approved-tool catalogue (name, QGIS
-  Processing algorithm ID, parameter shape) that `app/validator.py` checks
-  plans against, but every tool function body is a `raise NotImplementedError`
-  stub — real execution is Phase 1 work, and needs a PyQGIS-capable
-  environment to even import `qgis.core`.
-- `app/planner.py` is a stub that does **not** call any AI API yet — it
-  returns the one illustrative plan from the proposal regardless of input,
-  clearly marked as a placeholder.
+- **Plain** (`requirements.txt`, any Python): the FastAPI app boots, every
+  endpoint responds, plan validation is real. Calling anything that needs
+  `gis_worker`'s actual QGIS execution raises a clear `RuntimeError`
+  ("needs the groundpatch-gis conda environment") rather than an opaque
+  `ImportError` buried somewhere.
+- **`groundpatch-gis`** (`environment-qgis.yml`, conda): everything above,
+  plus real execution.
 
-## Phased plan (unchanged from the proposal, restated here as the source of truth)
+Keep this split — don't merge QGIS into a pip-based environment or vice
+versa. The orchestration layer (routes, validation, models) should stay
+testable and installable anywhere; only the worker needs QGIS's much
+heavier, conda-only footprint.
 
-1. **Phase 1 — connect the chat to GIS operations.** Buffer/clip/intersect/
-   dissolve/area/distance only. One generated GeoJSON layer returned and
-   added to the existing map/legend. Acceptance test: ask for a 500m buffer,
-   see a correctly-measured polygon appear on the map.
-2. **Phase 2 — multi-step analysis and map sync.** Chain approved
-   operations, update the layer list/legend/stats table, add previews and
-   confirmation before expensive operations, persist job results so a
-   refresh doesn't lose the analysis.
-3. **Phase 3 — QGIS project generation.** Real `.qgz` + `.gpkg` +
-   `analysis_summary.csv` + `processing_log.json` + `README.txt`, zipped,
-   reusing the existing QML styling/grouping conventions
-   (`buildQML()`/`QGIS_SCRIPT` in `index.html`). Acceptance test: the
-   package opens cleanly in desktop QGIS on a different machine.
-4. **Phase 4 — production readiness.** Auth, per-user/project isolation,
-   resource limits, logging, retention policy, dataset-freshness
-   indicators, CRS/geometry/area automated tests, and a licensing check on
-   every data source before anything ships.
+## Phased plan (restated from the proposal as the source of truth)
 
-Do Phase 1 next, but keep the Phase 3 output shape (the ZIP layout below) in
-mind from the start so the job/result models don't need reshaping later.
-
-### Phase 3 output package shape (for later, documented now so Phase 1's models match it)
-
-```
-GroundPatch_AI_Analysis.zip
-  GroundPatch_AI_Analysis.qgz   — QGIS project
-  analysis_results.gpkg          — spatial layers and tables
-  analysis_summary.csv           — summary statistics
-  processing_log.json            — operations and parameters actually run
-  README.txt                      — data sources, retrieval dates, limitations
-```
+1. **Phase 1 — connect operations to a real GIS engine.** ✅ Buffer, clip,
+   intersection, difference, dissolve, calculate_area, calculate_distance —
+   all real, all verified (see below). Chaining already works (a job is a
+   *sequence* of operations, each able to reference an earlier one's
+   `output`) — the proposal lists chaining under Phase 2, but it fell out
+   naturally from how `jobs.py` executes a plan and didn't need separate
+   work. **Not done**: `index.html`'s chat panel doesn't call this backend
+   yet — there's no live deployment this points at, and no UI changes have
+   been made for a "processing mode," sending the layer catalogue, or
+   rendering a job's resulting layer on the map. `/api/ai/plan` is still a
+   stub (no real AI call).
+2. **Phase 2 — map/legend sync.** The multi-step chaining part is already
+   covered by Phase 1's implementation (see above). What's left: add
+   output layers to `index.html`'s actual layer list/legend/visibility
+   controls, a stats table, previews/confirmation before a job runs,
+   cancellation, and persisting results so a page refresh doesn't lose an
+   analysis — all `index.html`-side work, none of it started.
+3. **Phase 3 — QGIS project generation.** Not started. `project_builder.py`
+   is a stub; see its docstring for the implementation plan and the output
+   ZIP shape (`.qgz` + `.gpkg` + `analysis_summary.csv` +
+   `processing_log.json` + `README.txt`).
+4. **Phase 4 — production readiness.** Not started. Auth, per-user/project
+   isolation, resource limits, logging, retention policy, dataset-freshness
+   indicators, and a licensing check on every data source before anything
+   ships.
 
 ## Explicit non-goals (per the proposal)
 
@@ -177,36 +222,56 @@ GroundPatch_AI_Analysis.zip
   queries, exports, the existing QGIS script, the automated report) are
   untouched — this backend is additive.
 
-## Running the stub service locally
+## Running it locally
 
 ```
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+conda env create -f environment-qgis.yml
+conda activate groundpatch-gis
+pip install -r requirements.txt   # FastAPI/uvicorn/pydantic, into the same env
+export QT_QPA_PLATFORM=offscreen  # headless server - see "GIS engine: PyQGIS" above
 uvicorn app.main:app --reload
 ```
 
-Then `GET http://localhost:8000/docs` for the interactive API docs, or see
-`tests/test_api_contract.py` for example requests against every endpoint.
-This works with **no QGIS environment at all** — every response right now is
-mocked. Standing up `environment-qgis.yml` is only needed once
-`app/gis_worker.py`'s stubs are turned into real implementations.
+`GET http://localhost:8000/docs` for interactive API docs. Without the
+conda env (plain `pip install -r requirements.txt` in any Python 3.11+
+environment), the same `uvicorn app.main:app` boots and every endpoint
+responds — `/api/jobs` with a plan that needs real execution returns a
+clear `RuntimeError` message instead of a result.
 
-Run the test suite (installs pytest/httpx on top of the app's own deps):
+### Running the test suite
 
 ```
 pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-All 8 tests pass as of this scaffold — they assert response *shape* (status
-codes, the mock flag, validation rejecting a bad plan with the right error)
-against the mocked endpoints, not real GIS output. Verified in this
-repository's own dev sandbox: a venv with `requirements.txt` installed boots
-`uvicorn app.main:app`, and every endpoint in the table above was hit with
-curl and returned exactly what's described — including the deliberate
-"valid plan, but execution isn't implemented" error from `/api/jobs`, the
-three validation-rejection cases (unapproved tool, wrong units for the
-tool, unknown input reference), 404s on an unknown job id for all four
-job-scoped endpoints, and a real downloadable (if mock-content) ZIP from
-`/api/jobs/{id}/project`.
+11 tests: 8 run in any environment (health check, plan stub shape,
+validation rejection cases, 404s, the mock project-ZIP download). 3 need
+`groundpatch-gis` and auto-skip without it (`QGIS_AVAILABLE` gate) — real
+end-to-end job execution, real results/layer endpoints returning computed
+geometry, and a regression test specifically for the CRS/units footgun
+(buffer distance must visibly correspond to real metres, not raw degrees).
+
+## Verified
+
+Not just written — run, in this repository's own dev sandbox, both ways:
+
+- **Plain environment**: a venv with `requirements.txt` installed boots
+  `uvicorn app.main:app`; every endpoint was hit with curl; `pytest tests/`
+  passes 8, skips 3.
+- **`groundpatch-gis` (conda-forge QGIS 3.44)**: `conda activate` +
+  `uvicorn app.main:app`, then the exact proposal example — buffer 500m,
+  intersect with a threatened-ecological-community polygon, calculate area
+  in hectares — sent as a real `POST /api/jobs` with real GeoJSON in
+  `layer_data`, came back `"state": "done"`, and `GET .../results` /
+  `GET .../layers/communities_within_site` returned the real computed
+  polygon with a real `area_ha` field. `pytest tests/` passes all 11,
+  including through `TestClient` (which is what first surfaced the thread-
+  affinity deadlock described above, before the fix).
+- Two algorithm IDs from the proposal's own wording turned out not to exist
+  under those names in QGIS 3.44 once actually checked against
+  `QgsApplication.processingRegistry()`: `qgis:calculategeometryattributes`
+  doesn't exist (replaced by `native:exportaddgeometrycolumns`), and
+  `distancetonearesthubpoints` is `qgis:`-prefixed, not `native:`. Both
+  fixed in `gis_worker.APPROVED_TOOLS` and confirmed working, not just
+  assumed from documentation.

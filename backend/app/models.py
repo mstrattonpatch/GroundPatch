@@ -104,6 +104,16 @@ class PlanResponse(BaseModel):
 class JobCreateRequest(BaseModel):
     plan: GisPlan
     site_context: SiteContext
+    # /api/ai/plan deliberately only sends lightweight catalogue metadata
+    # (per the proposal: "does not need to send ... every dataset to the
+    # AI") - but *executing* a plan needs real feature geometry for every
+    # layer id an operation references. index.html already holds that data
+    # client-side (lyr.lastGeoJSON per queried layer), so the job-creation
+    # request is where it's actually sent, keyed by layer id exactly as
+    # they appear in site_context.layers (plus "subject_site" for the
+    # boundary). jobs.py errors clearly if an operation references an id
+    # with no entry here, rather than failing deep inside gis_worker.py.
+    layer_data: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class JobState(str, Enum):
