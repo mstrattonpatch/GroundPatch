@@ -828,7 +828,7 @@
 
     <section id="exportSection" style="display:none;">
       <h2>Export data</h2>
-      <button class="primary" id="downloadAllZip">Download all as Shapefiles (.zip)</button>
+      <button class="primary" id="downloadAllZip">Export assessment package (.zip)</button>
       <div id="exportList" style="margin-top:12px;"></div>
       <button class="secondary" id="exportReportXlsx" style="margin-top:4px;">Export report (.xlsx)</button>
       <button class="textbtn" id="viewQgisScript" style="margin-top:8px;">View QGIS styling script</button>
@@ -5584,8 +5584,81 @@ async function exportSpeciesSightingsDocx(result){
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }
 
-// One-click bundle: boundary, buffer, every queried layer as GeoJSON + CSV,
-// and the summary report — everything a research file needs in one zip.
+// README: CRS, every layer's source URL/retrieval time/status, and the
+// buffer/clipping methodology — so the package is self-describing without
+// needing GroundPatch itself to interpret it later.
+function buildPackageReadme(){
+  const lines = [];
+  lines.push('GROUNDPATCH — ASSESSMENT EXPORT PACKAGE');
+  lines.push('Generated: ' + new Date().toLocaleString());
+  lines.push('');
+  lines.push('SITE');
+  if(boundaryGeom) lines.push(`  Boundary area: ${polygonAreaHa(boundaryGeom).toFixed(2)} ha`);
+  lines.push(`  Assessment buffer (ecology/planning layers): ${ASSESSMENT_BUFFER_KM} km`);
+  lines.push(`  Context buffer (cadastre/context layers): ${CONTEXT_BUFFER_KM*1000} m`);
+  lines.push('');
+  lines.push('COORDINATE REFERENCE SYSTEM');
+  lines.push('  All geometry in this package is WGS84 (EPSG:4326, decimal degrees) —');
+  lines.push('  every source service was queried with outSR=4326, and no reprojection');
+  lines.push('  is applied anywhere in GroundPatch.');
+  lines.push('');
+  lines.push('DATA SOURCES');
+  layers.filter(l=>l.queryStatus).forEach(l=>{
+    const when = l.retrievedAt ? new Date(l.retrievedAt).toLocaleString() : 'unknown';
+    const src = l.url ? `${l.url}${l.id!=null?('/'+l.id):''}` : (l.derived ? `derived from "${l.sourceLayer}"` : 'unknown source');
+    lines.push(`  - ${l.name}`);
+    lines.push(`      Source: ${src}`);
+    lines.push(`      Retrieved: ${when}  |  Status: ${l.queryStatus}`);
+  });
+  lines.push('');
+  lines.push('PROCESSING STEPS');
+  lines.push(`  1. Ecology/planning layers queried against a ${ASSESSMENT_BUFFER_KM}km buffer around the site boundary;`);
+  lines.push(`     cadastre/context-only layers queried against a ${CONTEXT_BUFFER_KM*1000}m buffer instead.`);
+  lines.push('  2. Each layer\'s raw query result is clipped to its own buffer extent.');
+  lines.push('  3. Categorised layers (e.g. GDE Probability, Strahler order) are coloured/grouped by their display field;');
+  lines.push('     line layers that are summarised per named feature are dissolved by name first.');
+  lines.push('');
+  lines.push('See MANIFEST.txt in this package for any layer that returned partial, capped, or failed results —');
+  lines.push('any statistic derived from those layers (areas, counts) should be treated as potentially incomplete.');
+  return lines.join('\n');
+}
+
+// MANIFEST: just the layers that need a second look - nothing for a fully
+// successful layer, so the file stays short on a clean run and prominent
+// on a run that wasn't.
+function buildPackageManifest(){
+  const lines = [];
+  lines.push('GROUNDPATCH — EXPORT MANIFEST (warnings only)');
+  lines.push('Generated: ' + new Date().toLocaleString());
+  lines.push('');
+  const notComplete = layers.filter(l=> l.queryStatus && l.queryStatus !== 'complete');
+  const queried = layers.filter(l=> l.queryStatus);
+  if(!notComplete.length){
+    lines.push(`All ${queried.length} queried layer(s) returned complete results. No known data-completeness issues.`);
+  } else {
+    lines.push(`${notComplete.length} of ${queried.length} queried layer(s) did not return a complete result:`);
+    lines.push('');
+    notComplete.forEach(l=>{
+      lines.push(`  - ${l.name}  [${l.queryStatus.toUpperCase()}]`);
+      if(l.lastGeoJSON){
+        if(l.lastGeoJSON.truncated) lines.push('      Hit the 20,000-feature safety cap — results are incomplete.');
+        if(l.lastGeoJSON.partial) lines.push('      Some data failed to load after retrying — results may be incomplete.');
+        if(l.lastGeoJSON.unpaginatedFallback) lines.push(`      Pagination failed — may be capped at the server's default limit. Reason: ${l.lastGeoJSON.unpaginatedFallbackReason || 'unknown'}`);
+      }
+      if(l.queryStatus === 'failed') lines.push('      Query failed outright — this layer may be missing from the package entirely.');
+    });
+    lines.push('');
+    lines.push('Any area, count, or percentage statistic derived from the layer(s) above should be treated as');
+    lines.push('potentially incomplete, not a confirmed absence/extent.');
+  }
+  return lines.join('\n');
+}
+
+// One-click bundle: boundary, buffer, every queried layer as shapefile +
+// GeoJSON + CSV, the summary report, a README (CRS/sources/retrieval
+// dates/methodology) and a MANIFEST (which layers are incomplete and why)
+// — everything a research file needs in one zip, self-describing enough
+// to hand to someone who's never opened GroundPatch.
 document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
   const btn = document.getElementById('downloadAllZip');
   const original = btn.textContent;
@@ -5609,7 +5682,7 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
     }
     layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features.length).forEach(l=>{
       const slug = l.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
-      items.push({ name: slug, fc: l.lastGeoJSON,
+      items.push({ name: slug, fc: l.lastGeoJSON, isDataLayer:true,
         style:{ field:l.field, color:l.color, noCategorize:l.noCategorize, colorMap:l.colorMap, widthMap:l.widthMap, outlineOnly:l.outlineOnly } });
     });
 
@@ -5619,6 +5692,8 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
     const skipped = [];
     for(const item of items){
       try{
+        masterZip.file(item.name + '/' + item.name + '.geojson', JSON.stringify(item.fc));
+        if(item.isDataLayer) masterZip.file(item.name + '/' + item.name + '.csv', geojsonToCSV(item.fc));
         const normalized = normalizeGeomType(item.fc);
         const parts = buildShapefileParts(normalized);
         masterZip.file(item.name + '/' + item.name + '.shp', parts.shp);
@@ -5632,13 +5707,18 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
       }
     }
 
+    const reportText = document.getElementById('reportBox').textContent;
+    if(reportText) masterZip.file('report.txt', reportText);
+    masterZip.file('README.txt', buildPackageReadme());
+    masterZip.file('MANIFEST.txt', buildPackageManifest());
+
     if(masterZip.file(/.*/).length === 0){
       alert('Could not build any shapefiles — every layer failed. This usually means a geometry issue across the board rather than one bad layer.');
       return;
     }
 
     const blob = await masterZip.generateAsync({ type:'blob' });
-    downloadBlob('site-data-shapefiles.zip', blob, 'application/zip');
+    downloadBlob('groundpatch-assessment-package.zip', blob, 'application/zip');
     showQgisScriptModal();
     if(skipped.length){
       alert('Downloaded — but skipped ' + skipped.length + ' layer(s) that failed to convert: ' + skipped.join(', ') + '. Try their individual Shapefile button below to see the specific error.');
