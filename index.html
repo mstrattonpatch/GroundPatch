@@ -3765,6 +3765,114 @@ function safeDifference(a, b){
   catch(e){ return a; }
 }
 
+/* =========================================================
+   Constraints area statistics — automatic, read-only area/percentage
+   breakdown of every queried polygon layer against the subject site,
+   independent of the manual High/Medium/Low tool above (which requires
+   assigning each class to a tier by hand). Reuses the same clip/group
+   helpers as that tool so the two stay numerically consistent with
+   each other.
+========================================================= */
+let constraintsStatsRows = [];
+
+function computeConstraintsStatistics(){
+  const options = getConstraintLayerOptions(); // already clips to boundaryGeom, excludes context-only layers
+  const siteHa = polygonAreaHa(boundaryGeom);
+
+  const rows = [];
+  options.forEach(opt=>{
+    opt.groups.forEach(g=>{
+      rows.push({ layerName: opt.layerName, label: g.label, areaHa: g.areaHa, features: g.features });
+    });
+  });
+  rows.sort((a,b)=> b.areaHa - a.areaHa);
+
+  // Remaining unconstrained area: union every on-site clipped feature across
+  // every qualifying layer (ignoring class), regardless of which rows above
+  // it came from, then subtract that from the site boundary - matches how
+  // the biodiversity constraints tool dissolves overlaps, just without
+  // sorting anything into a tier first.
+  const allOnSiteFeatures = options.flatMap(opt => opt.groups.flatMap(g => g.features));
+  let remainingHa = null;
+  if(allOnSiteFeatures.length){
+    const unioned = dissolveFeatures(allOnSiteFeatures);
+    const remainder = safeDifference(boundaryGeom ? turf.feature(boundaryGeom) : null, unioned);
+    if(remainder){ try{ remainingHa = turf.area(remainder) / 10000; }catch(e){} }
+  } else {
+    remainingHa = siteHa;
+  }
+
+  // A simpler, per-layer (not per-class) total within the surrounding
+  // buffer, for context - the detailed class breakdown above is already
+  // specific to the site itself.
+  const bufferTotals = [];
+  layers.forEach(lyr=>{
+    if(lyr.bufferKm === CONTEXT_BUFFER_KM) return;
+    if(!lyr.lastGeoJSON || !lyr.lastGeoJSON.features.length) return;
+    const firstType = lyr.lastGeoJSON.features[0].geometry && lyr.lastGeoJSON.features[0].geometry.type;
+    if(firstType !== 'Polygon' && firstType !== 'MultiPolygon') return;
+    let areaHa = 0;
+    lyr.lastGeoJSON.features.forEach(f=>{ try{ areaHa += turf.area(f) / 10000; }catch(e){} });
+    bufferTotals.push({ layerName: lyr.name, areaHa });
+  });
+  bufferTotals.sort((a,b)=> b.areaHa - a.areaHa);
+
+  return { siteHa, rows, remainingHa, bufferTotals };
+}
+
+function renderConstraintsStatsPanel(){
+  const panel = document.getElementById('constraintsStatsPanel');
+  if(!boundaryGeom){ panel.innerHTML = '<div class="cs-row">Load a site boundary first.</div>'; return; }
+
+  const { siteHa, rows, remainingHa, bufferTotals } = computeConstraintsStatistics();
+  constraintsStatsRows = rows;
+
+  if(!rows.length){
+    panel.innerHTML = '<div class="cs-row">None of the queried polygon layers intersect the subject site — nothing to summarise yet.</div>';
+    return;
+  }
+
+  const siteRowsHtml = rows.map((r, i)=> `
+    <div class="cs-row">
+      <span class="cs-label" title="${xmlEscape(r.layerName)} — ${xmlEscape(r.label)}">${xmlEscape(r.layerName)} — ${xmlEscape(r.label)}</span>
+      <span class="cs-ha">${r.areaHa.toFixed(2)} ha</span>
+      <span class="cs-pct">${(r.areaHa / siteHa * 100).toFixed(1)}%</span>
+      <button class="textbtn" style="margin:0;" data-zoom-stat="${i}">Zoom</button>
+    </div>`).join('');
+
+  const bufferHtml = bufferTotals.length ? `
+    <div style="margin-top:14px;font-weight:600;font-size:12px;">Within the ${ASSESSMENT_BUFFER_KM}km assessment buffer (not clipped to the site)</div>
+    ${bufferTotals.map(b=> `
+      <div class="cs-row">
+        <span class="cs-label">${xmlEscape(b.layerName)}</span>
+        <span class="cs-ha">${b.areaHa.toFixed(2)} ha</span>
+      </div>`).join('')}` : '';
+
+  panel.innerHTML = `
+    <div style="font-weight:600;font-size:12px;margin-bottom:4px;">On the subject site (${siteHa.toFixed(2)} ha), largest first</div>
+    ${siteRowsHtml}
+    ${remainingHa != null ? `
+    <div class="cs-row" style="font-weight:600;">
+      <span class="cs-label">Remaining unconstrained area</span>
+      <span class="cs-ha">${remainingHa.toFixed(2)} ha</span>
+      <span class="cs-pct">${(remainingHa / siteHa * 100).toFixed(1)}%</span>
+    </div>` : ''}
+    ${bufferHtml}
+    <div style="color:var(--ink-soft);font-size:11px;margin-top:10px;">Rows under the same layer can overlap each other before dissolving — "Remaining unconstrained area" accounts for that overlap (it's the site minus the union of every row above, not the site minus their sum).</div>`;
+
+  panel.querySelectorAll('[data-zoom-stat]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const row = constraintsStatsRows[Number(btn.dataset.zoomStat)];
+      if(!row) return;
+      try{
+        const bounds = L.geoJSON({ type:'FeatureCollection', features: row.features }).getBounds();
+        map.flyToBounds(bounds, { maxZoom:17, padding:[40,40] });
+      }catch(e){}
+    });
+  });
+}
+document.getElementById('calcConstraintsStats').addEventListener('click', renderConstraintsStatsPanel);
+
 function generateBioConstraints(){
   if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
   const statusEl = document.getElementById('bcGenerateStatus');
