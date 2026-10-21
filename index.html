@@ -2786,7 +2786,13 @@ async function queryLayerByIds(lyr){
       objectIds: chunkIds.join(','),
       outSR:'4326',
       outFields:'*',
-      returnGeometry:'true'
+      returnGeometry:'true',
+      // 6 decimal degrees is ~11cm at this latitude — far finer than this
+      // app needs, but it shrinks the response substantially for a
+      // vertex-dense layer like SVTM's vegetation polygons, which were
+      // timing out/failing through the proxy well before coarser-geometry
+      // layers like cadastre or GDE ever did.
+      geometryPrecision:'6'
     });
     try{
       const resp = await postQuery(endpoint, params);
@@ -2813,7 +2819,7 @@ async function queryLayerByIds(lyr){
     }
   }
 
-  const chunkSize = 200;
+  const chunkSize = 75;
   for(let i=0; i<ids.length; i+=chunkSize){
     await fetchChunk(ids.slice(i, i+chunkSize), true);
   }
@@ -2841,7 +2847,8 @@ async function queryLayerSimple(lyr){
     outSR:'4326',
     spatialRel:'esriSpatialRelIntersects',
     outFields:'*',
-    returnGeometry:'true'
+    returnGeometry:'true',
+    geometryPrecision:'6'
   });
   const resp = await postQuery(endpoint, params);
   const gj = await resp.json();
