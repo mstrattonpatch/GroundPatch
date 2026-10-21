@@ -2796,17 +2796,37 @@ function clipFeatureToBuffer(feature, bufferGeom){
     }
     if(gtype === 'LineString' || gtype === 'MultiLineString'){
       const lines = gtype === 'LineString' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+      const bufferBbox = turf.bbox(bufferFeature);
       const kept = [];
       lines.forEach(coords=>{
-        const lineFeat = turf.lineString(coords);
-        let segments;
-        try{ segments = turf.lineSplit(lineFeat, bufferFeature).features; }
-        catch(e){ segments = [lineFeat]; }
-        if(!segments.length) segments = [lineFeat];
-        segments.forEach(seg=>{
-          const c = seg.geometry.coordinates;
-          const mid = c[Math.floor(c.length/2)];
-          if(turf.booleanPointInPolygon(turf.point(mid), bufferFeature)) kept.push(c);
+        // Real-world stream/road lines (the NSW hydro dataset in particular)
+        // can run for tens of kilometres — a single feature that happens to
+        // pass through a small buffer. bboxClip first guarantees no
+        // coordinate outside the buffer's bounding box can ever survive,
+        // regardless of what lineSplit does next — it previously fell back
+        // to keeping the WHOLE original line (array-index "midpoint" test
+        // only) whenever it failed to find a crossing, which silently kept
+        // entire multi-km rivers on screen whenever that happened.
+        let lineFeat;
+        try{
+          const clipped = turf.bboxClip(turf.lineString(coords), bufferBbox);
+          if(!clipped.geometry.coordinates.length) return; // nothing in the bbox at all
+          lineFeat = clipped.geometry.type === 'MultiLineString'
+            ? clipped.geometry.coordinates.map(c => turf.lineString(c))
+            : [turf.lineString(clipped.geometry.coordinates)];
+        }catch(e){
+          lineFeat = [turf.lineString(coords)]; // bboxClip itself failed — fall through to the lineSplit path below on the original line
+        }
+        lineFeat.forEach(lf=>{
+          let segments;
+          try{ segments = turf.lineSplit(lf, bufferFeature).features; }
+          catch(e){ segments = [lf]; }
+          if(!segments.length) segments = [lf];
+          segments.forEach(seg=>{
+            const c = seg.geometry.coordinates;
+            const mid = c[Math.floor(c.length/2)];
+            if(turf.booleanPointInPolygon(turf.point(mid), bufferFeature)) kept.push(c);
+          });
         });
       });
       if(!kept.length) return null;
