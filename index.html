@@ -2714,6 +2714,8 @@ async function queryLayerByIds(lyr){
   // stopping condition here can't compare against what WE asked for - it
   // has to keep paging until a page comes back genuinely empty, however
   // small the server's own real per-request cap turns out to be.
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
   const ID_PAGE_SIZE = 2000;
   const ID_PAGE_SAFETY_LIMIT = 50; // 50 pages is generous even at a server-side cap as low as a few hundred
   let ids = [];
@@ -2731,9 +2733,22 @@ async function queryLayerByIds(lyr){
       resultOffset:String(offset),
       resultRecordCount:String(ID_PAGE_SIZE)
     });
-    const idResp = await postQuery(endpoint, idParams);
-    const idJson = await idResp.json();
-    if(idJson.error) throw new Error(idJson.error.message || 'service returned an error');
+    // Same reasoning as the detail-fetch stage below: a shared proxy can
+    // drop a single request without the query itself being at fault, so
+    // one retry (with a brief backoff) happens here too before this
+    // propagates up as a hard failure for the whole layer.
+    let idJson = null;
+    for(let attempt=0; attempt<2 && idJson===null; attempt++){
+      try{
+        const idResp = await postQuery(endpoint, idParams);
+        const parsed = await idResp.json();
+        if(parsed.error) throw new Error(parsed.error.message || 'service returned an error');
+        idJson = parsed;
+      }catch(idErr){
+        if(attempt === 1) throw idErr;
+        await sleep(1000);
+      }
+    }
     const pageIds = idJson.objectIds || [];
     if(pageIds.length === 0) break; // genuinely nothing more, however small each page turned out to be
     ids.push(...pageIds);
@@ -2751,30 +2766,47 @@ async function queryLayerByIds(lyr){
 
   const allFeatures = [];
   let partial = false;
-  const chunkSize = 500;
-  for(let i=0; i<ids.length; i+=chunkSize){
-    const chunk = ids.slice(i, i+chunkSize);
+
+  // Fetches one slice of ids, retrying with a short backoff, and — if it
+  // keeps failing — splits the slice in half and recurses rather than
+  // giving up on the whole thing. A shared proxy under load (or a
+  // vertex-dense layer like SVTM producing a large GeoJSON response) is
+  // more likely to choke on one big request than on several smaller ones,
+  // so halving a failing slice recovers data a flat "retry the same size
+  // twice then skip" approach would have thrown away entirely.
+  const MIN_SLICE = 25;
+  async function fetchSlice(sliceIds){
     const params = new URLSearchParams({
       f:'geojson',
-      objectIds: chunk.join(','),
+      objectIds: sliceIds.join(','),
       outSR:'4326',
       outFields:'*',
       returnGeometry:'true'
     });
-    // A single failed chunk shouldn't throw away every feature already
-    // fetched — retry once, then skip just that chunk and keep going.
-    let gj = null;
-    for(let attempt=0; attempt<2 && gj===null; attempt++){
+    for(let attempt=0; attempt<2; attempt++){
       try{
         const resp = await postQuery(endpoint, params);
         const parsed = await resp.json();
         if(parsed.error) throw new Error(parsed.error.message || 'service returned an error');
-        gj = parsed;
-      }catch(chunkErr){
-        if(attempt === 1){ partial = true; console.warn(`${lyr.name}: chunk ${i}-${i+chunk.length} failed twice, skipping`, chunkErr); }
+        allFeatures.push(...(parsed.features || []));
+        return;
+      }catch(sliceErr){
+        if(attempt === 0) await sleep(1000); // brief backoff before the one retry at this size
+        else if(sliceIds.length > MIN_SLICE){
+          const mid = Math.ceil(sliceIds.length / 2);
+          await fetchSlice(sliceIds.slice(0, mid));
+          await fetchSlice(sliceIds.slice(mid));
+        }else{
+          partial = true;
+          console.warn(`${lyr.name}: slice of ${sliceIds.length} id(s) failed at minimum size, skipping`, sliceErr);
+        }
       }
     }
-    if(gj) allFeatures.push(...(gj.features || []));
+  }
+
+  const chunkSize = 200;
+  for(let i=0; i<ids.length; i+=chunkSize){
+    await fetchSlice(ids.slice(i, i+chunkSize));
   }
   const result = { type:'FeatureCollection', features: allFeatures };
   if(truncated) result.truncated = true;
