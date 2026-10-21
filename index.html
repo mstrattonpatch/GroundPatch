@@ -866,6 +866,7 @@
   #aiSymbologyCard .sym-cat-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
   #aiSymbologyCard .sym-cat-head span{ margin:0; }
   #aiSymbologyCard .sym-cat-head .textbtn{ margin:0; }
+  #aiSymbologyCard .sym-cat-hint{ font-size:11.5px; color:var(--ink-faint); font-style:italic; margin:0; }
   #aiSymbologyCard .sym-cat-list{
     max-height:190px; overflow-y:auto; border:1px solid var(--line); border-radius:var(--radius-sm); padding:2px 10px;
   }
@@ -1041,6 +1042,7 @@
             <span>Categories</span>
             <button type="button" class="textbtn" id="aiSymbologyRandomize">Randomize colours</button>
           </div>
+          <p id="aiSymbologyCatHint" class="sym-cat-hint">Choose a field above to generate categories.</p>
           <div id="aiSymbologyCatList" class="sym-cat-list"></div>
         </div>
       </div>
@@ -7106,13 +7108,17 @@ function openAiSymbologyModal(entry){
   const fieldSelect = document.getElementById('aiSymbologyCatField');
   const geojson = entry.getGeoJSON();
   const fields = (geojson.features[0] && Object.keys(geojson.features[0].properties || {})) || [];
-  fieldSelect.innerHTML = fields.map(f=>`<option value="${xmlEscape(f)}">${xmlEscape(f)}</option>`).join('');
-  if(entry.sym.field && fields.includes(entry.sym.field)) fieldSelect.value = entry.sym.field;
-  else if(fields.length) entry.sym.field = fields[0];
+  // No default field — categorizing by whichever property happens to
+  // come first in the data is exactly the "picks a random one for you"
+  // behaviour this control exists to avoid. Nothing gets categorized
+  // until a field is explicitly chosen below.
+  fieldSelect.innerHTML = '<option value="">— choose a field —</option>' + fields.map(f=>`<option value="${xmlEscape(f)}">${xmlEscape(f)}</option>`).join('');
+  fieldSelect.value = (entry.sym.field && fields.includes(entry.sym.field)) ? entry.sym.field : '';
 
   updateAiSymbologyModeVisibility();
-  if(entry.sym.mode === 'categorized') aiEnsureCategoriesPopulated();
+  if(entry.sym.mode === 'categorized' && entry.sym.field) aiEnsureCategoriesPopulated();
   renderAiCategoryList();
+  updateAiSymbologyCatHint();
   updateAiSymbologyPreview();
   document.getElementById('aiSymbologyModal').classList.add('show');
 }
@@ -7192,21 +7198,34 @@ const aiApplySymbologyDebounced = debounce(()=>{
   renderAiLayerTree();
 }, 150);
 
+function updateAiSymbologyCatHint(){
+  const hasField = !!(aiSymbologyEntry && aiSymbologyEntry.sym.field);
+  document.getElementById('aiSymbologyCatHint').style.display = hasField ? 'none' : '';
+  document.getElementById('aiSymbologyCatList').style.display = hasField ? '' : 'none';
+  document.getElementById('aiSymbologyRandomize').style.display = hasField ? '' : 'none';
+}
+
 document.getElementById('aiSymbologyMode').addEventListener('change', e=>{
   if(!aiSymbologyEntry) return;
   aiSymbologyEntry.sym.mode = e.target.value;
   updateAiSymbologyModeVisibility();
-  if(e.target.value === 'categorized') aiEnsureCategoriesPopulated();
+  // Switching to Categorized does NOT auto-pick a field — only
+  // (re)categorizes if one was already chosen on a previous visit to
+  // this dialog for this layer.
+  if(e.target.value === 'categorized' && aiSymbologyEntry.sym.field) aiEnsureCategoriesPopulated();
   renderAiCategoryList();
+  updateAiSymbologyCatHint();
   aiApplySymbology(aiSymbologyEntry);
   updateAiSymbologyPreview();
   renderAiLayerTree();
 });
-document.getElementById('aiSymbologyCatField').addEventListener('change', ()=>{
+document.getElementById('aiSymbologyCatField').addEventListener('change', e=>{
   if(!aiSymbologyEntry) return;
+  aiSymbologyEntry.sym.field = e.target.value || null;
   aiSymbologyEntry.sym.categories = {}; // field changed — old values/colours don't apply
-  aiEnsureCategoriesPopulated();
+  if(aiSymbologyEntry.sym.field) aiEnsureCategoriesPopulated();
   renderAiCategoryList();
+  updateAiSymbologyCatHint();
   aiApplySymbology(aiSymbologyEntry);
   updateAiSymbologyPreview();
   renderAiLayerTree();
