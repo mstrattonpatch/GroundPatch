@@ -141,7 +141,14 @@ def chat_turn(request: ChatRequest) -> ChatResponse:
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=2048,
+        # Long requests (a pasted client email with several tables, a
+        # multi-step consolidation plan) produce long replies — 2048 was
+        # getting hit mid-sentence on exactly that kind of turn, which
+        # then sometimes left the *next* turn with no visible content at
+        # all once the truncated reply was back in the conversation
+        # history being resent. 8192 gives real headroom for a detailed
+        # explanation plus a non-trivial operations list in the same turn.
+        max_tokens=8192,
         system=system_prompt,
         messages=messages,
         tools=[PROPOSE_PLAN_TOOL],
@@ -151,7 +158,17 @@ def chat_turn(request: ChatRequest) -> ChatResponse:
     tool_use = next((block for block in response.content if block.type == "tool_use"), None)
 
     if tool_use is None:
-        return ChatResponse(reply="\n".join(text_parts).strip() or "(no response)", mock=False)
+        reply = "\n".join(text_parts).strip()
+        if not reply:
+            # A genuinely empty turn (no text, no tool call) is unusual —
+            # surface *why* instead of a bare "(no response)" so this is
+            # diagnosable from the chat itself, not just backend logs.
+            reply = (
+                f"(The model returned no visible content this turn — stop_reason: "
+                f"{response.stop_reason!r}. Try rephrasing, or splitting the request "
+                f"into smaller steps.)"
+            )
+        return ChatResponse(reply=reply, mock=False)
 
     try:
         operations = [Operation(**op) for op in tool_use.input.get("operations", [])]

@@ -542,9 +542,11 @@
   .ai-launch-btn:disabled{ background:var(--line-strong); color:var(--ink-faint); cursor:not-allowed; filter:none; }
 
   #aiLayerPanel, #aiChatPanel{
-    width:360px; min-width:360px; background:var(--panel);
+    background:var(--panel);
     display:none; flex-direction:column; overflow:hidden; position:relative; z-index:2;
   }
+  #aiLayerPanel{ width:360px; min-width:360px; }
+  #aiChatPanel{ width:560px; min-width:420px; max-width:40vw; }
   #aiLayerPanel.open, #aiChatPanel.open{ display:flex; }
   #aiLayerPanel{ border-right:1px solid var(--line); }
   #aiChatPanel{ border-left:1px solid var(--line); order:2; }
@@ -562,7 +564,12 @@
 
   #aiLayerPanelBody{ flex:1; overflow-y:auto; padding:16px 20px 40px; }
   #aiChatPanel > .section-note{ padding:16px 20px 0; margin:0 0 12px; }
-  #aiChatPanelBody{ flex:1; overflow-y:auto; padding:0 20px 20px; display:flex; flex-direction:column; min-height:0; }
+  /* Only the message list scrolls — everything else (input, status, clear
+     link, results) stays pinned, so the message area fills the whole
+     panel height instead of being capped to a small fixed box. */
+  #aiChatPanelBody{ flex:1; overflow:hidden; padding:0 20px 20px; display:flex; flex-direction:column; min-height:0; }
+  #aiGisChatMessages{ font-size:14px; }
+  #aiGisChatMessages .chat-msg{ font-size:14px; line-height:1.6; max-width:96%; }
 
   .ai-upload-row{ margin-bottom:14px; }
   .ai-upload-row label.ai-upload-btn{
@@ -823,7 +830,7 @@
   /* ---------- AI Analysis "Layer Properties — Symbology" modal ---------- */
   #aiSymbologyModal{ z-index:3400; display:none; }
   #aiSymbologyModal.show{ display:flex; }
-  #aiSymbologyCard{ max-width:420px; width:100%; padding:0; overflow:hidden; }
+  #aiSymbologyCard{ max-width:480px; width:100%; max-height:88vh; padding:0; overflow:hidden; display:flex; flex-direction:column; }
   #aiSymbologyCard .sym-head{
     display:flex; align-items:center; gap:10px; padding:16px 20px;
     border-bottom:1px solid var(--line); background:var(--paper);
@@ -837,7 +844,7 @@
     color:var(--ink-faint); flex:none; padding:2px 6px; border-radius:6px;
   }
   #aiSymbologyCard .sym-close:hover{ color:var(--ink); background:var(--line); }
-  #aiSymbologyCard .sym-body{ padding:20px; }
+  #aiSymbologyCard .sym-body{ padding:20px; overflow-y:auto; flex:1; min-height:0; }
   #aiSymbologyCard .sym-preview{
     width:64px; height:64px; border:1px solid var(--line-strong); border-radius:6px; margin:0 auto 20px;
   }
@@ -847,10 +854,30 @@
     display:block; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
     color:var(--ink-soft); margin-bottom:8px;
   }
+  #aiSymbologyCard select{
+    width:100%; font-size:12.5px; padding:8px 10px; border:1px solid var(--line-strong); border-radius:var(--radius-sm);
+    background:var(--panel); color:var(--ink); cursor:pointer; font-family:inherit;
+  }
   #aiSymbologyCard input[type=color]{
     width:100%; height:36px; padding:2px; border:1px solid var(--line-strong); border-radius:var(--radius-sm);
     cursor:pointer; background:var(--panel);
   }
+  #aiSymbologyCategorizedFields{ display:none; }
+  #aiSymbologyCard .sym-cat-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  #aiSymbologyCard .sym-cat-head span{ margin:0; }
+  #aiSymbologyCard .sym-cat-head .textbtn{ margin:0; }
+  #aiSymbologyCard .sym-cat-list{
+    max-height:190px; overflow-y:auto; border:1px solid var(--line); border-radius:var(--radius-sm); padding:2px 10px;
+  }
+  #aiSymbologyCard .sym-cat-row{
+    display:flex; align-items:center; gap:9px; padding:6px 0; border-bottom:1px solid var(--line); font-size:12px;
+  }
+  #aiSymbologyCard .sym-cat-row:last-child{ border-bottom:none; }
+  #aiSymbologyCard .sym-cat-row input[type=checkbox]{ width:14px; height:14px; flex:none; margin:0; cursor:pointer; }
+  #aiSymbologyCard .sym-cat-row input[type=color]{
+    width:18px; height:18px; flex:none; padding:0; border:1px solid rgba(0,0,0,.15); border-radius:4px; cursor:pointer;
+  }
+  #aiSymbologyCard .sym-cat-row .sym-cat-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #aiSymbologyCard .sym-opacity-row{ display:flex; align-items:center; gap:10px; }
   #aiSymbologyCard .sym-opacity-row input[type=range]{ flex:1; }
   #aiSymbologyCard .sym-opacity-row input[type=number]{
@@ -858,7 +885,7 @@
   }
   #aiSymbologyCard .sym-opacity-row span{ font-size:12.5px; color:var(--ink-soft); }
   #aiSymbologyCard .sym-foot{
-    display:flex; gap:8px; justify-content:flex-end; padding:14px 20px; border-top:1px solid var(--line); background:var(--paper);
+    display:flex; gap:8px; justify-content:flex-end; padding:14px 20px; border-top:1px solid var(--line); background:var(--paper); flex:none;
   }
   #aiSymbologyCard .sym-foot button{ margin:0; width:auto; padding:8px 16px; }
 
@@ -990,10 +1017,44 @@
     </div>
     <div class="sym-body">
       <div id="aiSymbologyPreview" class="sym-preview"></div>
+
       <div class="sym-field">
+        <span>Renderer</span>
+        <select id="aiSymbologyMode">
+          <option value="single">Single Symbol</option>
+          <option value="categorized">Categorized</option>
+        </select>
+      </div>
+
+      <div class="sym-field" id="aiSymbologySingleColorField">
         <span>Color</span>
         <input type="color" id="aiSymbologyColor">
       </div>
+
+      <div id="aiSymbologyCategorizedFields">
+        <div class="sym-field">
+          <span>Value (field)</span>
+          <select id="aiSymbologyCatField"></select>
+        </div>
+        <div class="sym-field">
+          <div class="sym-cat-head">
+            <span>Categories</span>
+            <button type="button" class="textbtn" id="aiSymbologyRandomize">Randomize colours</button>
+          </div>
+          <div id="aiSymbologyCatList" class="sym-cat-list"></div>
+        </div>
+      </div>
+
+      <div class="sym-field">
+        <span>Fill style</span>
+        <select id="aiSymbologyFillStyle">
+          <option value="solid">Solid</option>
+          <option value="hatch-fwd">Hatch ( / )</option>
+          <option value="hatch-back">Hatch ( \ )</option>
+          <option value="cross">Cross-hatch</option>
+        </select>
+      </div>
+
       <div class="sym-field">
         <span>Opacity</span>
         <div class="sym-opacity-row">
@@ -1240,7 +1301,7 @@
   </div>
   <p class="section-note">Talk through the spatial analysis you need — buffers, overlays, reclassifying values against a table, consolidating layers.</p>
   <div id="aiChatPanelBody">
-    <div id="aiGisChatMessages" style="flex:1;min-height:160px;max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--panel);display:flex;flex-direction:column;gap:8px;"></div>
+    <div id="aiGisChatMessages" style="flex:1;min-height:0;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px;background:var(--panel);display:flex;flex-direction:column;gap:10px;"></div>
     <div style="display:flex;gap:6px;">
       <input type="text" id="aiGisChatInput" placeholder="e.g. Buffer the site by 500m and intersect with the SVTM layer" aria-label="Describe the analysis you need" style="flex:1;">
       <button class="secondary" id="aiGisChatSend">Send</button>
@@ -6795,65 +6856,156 @@ let aiUploadedLayers = []; // { id, name, geojson, mapLayerGroup, color, opacity
 const AI_UPLOAD_PALETTE = ['#C2559E','#3F8EA8','#C77D2E','#5B7FC4','#8A6FB0','#4F9E6E'];
 let aiUploadColorIdx = 0;
 
+/* =========================================================
+   Shared rendering for every AI Analysis workspace layer. Every kind
+   (boundary, fetched, uploaded, AI output) goes through the same
+   symbology model and the same builder function, so categorized
+   colours and hatch fills work identically no matter where a layer
+   came from.
+========================================================= */
+
+// One shared SVG renderer for every workspace layer, instead of the
+// map's default Canvas renderer (preferCanvas:true, set for performance
+// on the large screening layers) — a hatch fill is a CSS/SVG pattern
+// reference, which only paints through an SVG-backed layer.
+let aiSvgRenderer = null;
+function getAiSvgRenderer(){
+  if(!aiSvgRenderer){ aiSvgRenderer = L.svg(); aiSvgRenderer.addTo(map); }
+  return aiSvgRenderer;
+}
+
+const aiHatchPatternIds = new Set();
+// Registers (once) an SVG <pattern> for a colour/orientation pair and
+// returns its id, for use as fillColor:'url(#id)'. hatch-fwd/hatch-back
+// are single-direction 45°-rotated stripes (QGIS's "hashed black /" and
+// "\"); cross is an unrotated grid of both.
+function ensureHatchPattern(color, orientation){
+  const id = `ai-hatch-${orientation}-${color.replace('#','')}`;
+  if(aiHatchPatternIds.has(id)) return id;
+  const svgRoot = getAiSvgRenderer()._container;
+  if(!svgRoot) return id;
+  let defs = svgRoot.querySelector('defs');
+  if(!defs){ defs = document.createElementNS('http://www.w3.org/2000/svg','defs'); svgRoot.insertBefore(defs, svgRoot.firstChild); }
+  const size = 8;
+  const pattern = document.createElementNS('http://www.w3.org/2000/svg','pattern');
+  pattern.setAttribute('id', id);
+  pattern.setAttribute('width', String(size));
+  pattern.setAttribute('height', String(size));
+  pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+  const mkLine = (x1,y1,x2,y2)=>{
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1); line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', color); line.setAttribute('stroke-width', '1.4');
+    return line;
+  };
+  if(orientation === 'hatch-fwd'){ pattern.setAttribute('patternTransform','rotate(45)'); pattern.appendChild(mkLine(0,0,0,size)); }
+  else if(orientation === 'hatch-back'){ pattern.setAttribute('patternTransform','rotate(-45)'); pattern.appendChild(mkLine(0,0,0,size)); }
+  else { pattern.appendChild(mkLine(0,0,0,size)); pattern.appendChild(mkLine(0,0,size,0)); } // 'cross'
+  defs.appendChild(pattern);
+  aiHatchPatternIds.add(id);
+  return id;
+}
+
+function aiFillFor(color, fillStyle){
+  return (!fillStyle || fillStyle === 'solid') ? color : `url(#${ensureHatchPattern(color, fillStyle)})`;
+}
+
+function aiPopupBinder(name){
+  return (f, l)=>{
+    const rows = Object.entries(f.properties || {}).slice(0,10).map(([k,v])=>`<div><b>${escHtml(k)}</b>: ${escHtml(v)}</div>`).join('');
+    l.bindPopup(`<div style="min-width:160px;"><div style="font-weight:600;margin-bottom:4px;">${escHtml(name)}</div>${rows}</div>`);
+  };
+}
+
+function aiDefaultSym(color, opacity){
+  return { mode:'single', color: color || '#999999', opacity: opacity ?? 0.6, fillStyle:'solid', field:null, categories:{}, otherColor:'#CCCCCC' };
+}
+
+// Builds a fresh Leaflet layer from geojson + a symbology state object
+// (see aiDefaultSym for its shape). Always rebuilt from scratch rather
+// than setStyle()'d incrementally — the only way categorized colouring
+// and hatch-pattern fills can both work reliably through one path, for
+// every kind of workspace layer.
+function aiBuildStyledLayer(geojson, sym, name){
+  const renderer = getAiSvgRenderer();
+  if(sym.mode === 'categorized' && sym.field){
+    const colorFor = val => (sym.categories[val] && sym.categories[val].color) || sym.otherColor;
+    const visibleFor = val => !sym.categories[val] || sym.categories[val].visible !== false;
+    const styleFn = f=>{
+      const val = String((f.properties||{})[sym.field]);
+      if(!visibleFor(val)) return { opacity:0, fillOpacity:0, weight:0 };
+      const color = colorFor(val);
+      return { color, weight:1.2, fillColor: aiFillFor(color, sym.fillStyle), fillOpacity: sym.opacity };
+    };
+    return L.geoJSON(geojson, {
+      renderer, style: styleFn,
+      pointToLayer:(f, latlng)=>{
+        const val = String((f.properties||{})[sym.field]);
+        const color = colorFor(val);
+        const hidden = !visibleFor(val);
+        return L.circleMarker(latlng, { radius:5, color, weight:1.5, fillColor:color, fillOpacity: hidden?0:sym.opacity, opacity: hidden?0:1 });
+      },
+      onEachFeature: aiPopupBinder(name),
+    });
+  }
+  return L.geoJSON(geojson, {
+    renderer,
+    style:{ color: sym.color, weight:1.5, fillColor: aiFillFor(sym.color, sym.fillStyle), fillOpacity: sym.opacity },
+    pointToLayer:(f, latlng)=> L.circleMarker(latlng, { radius:5, color:sym.color, weight:1.5, fillColor:sym.color, fillOpacity:sym.opacity }),
+    onEachFeature: aiPopupBinder(name),
+  });
+}
+
 function getAiWorkspaceEntries(){
   const entries = [];
 
   if(boundaryGeom && boundaryLayer){
+    boundarySymbology.sym = boundarySymbology.sym || aiDefaultSym(boundarySymbology.color, boundarySymbology.fillOpacity);
     entries.push({
-      kind:'boundary', name:'Site boundary',
-      color: boundarySymbology.color, opacity: boundarySymbology.fillOpacity,
+      kind:'boundary', name:'Site boundary', sym: boundarySymbology.sym,
       visible: map.hasLayer(boundaryLayer), removable:false, renamable:false,
       getLayer: ()=> boundaryLayer,
+      setLayer: (nl)=>{ boundaryLayer = nl; },
       getGeoJSON: ()=> ({ type:'FeatureCollection', features:[{ type:'Feature', properties:{}, geometry: boundaryGeom }] }),
       toggleVisible:(v)=>{ if(v) boundaryLayer.addTo(map); else map.removeLayer(boundaryLayer); },
-      setColor:(c)=>{ boundarySymbology.color = c; boundaryLayer.setStyle({ color:c, fillColor:c }); },
-      setOpacity:(o)=>{ boundarySymbology.fillOpacity = o; boundaryLayer.setStyle({ fillOpacity:o }); },
     });
   }
 
   layers.filter(l => l.lastGeoJSON && l.lastGeoJSON.features && l.lastGeoJSON.features.length && l.mapLayerGroup).forEach(l=>{
-    if(l.workspaceOpacity == null) l.workspaceOpacity = 0.6;
+    l.sym = l.sym || aiDefaultSym(l.color, 0.6);
     entries.push({
-      kind:'fetched', name: l.name,
-      color: l.color, opacity: l.workspaceOpacity,
+      kind:'fetched', name: l.name, sym: l.sym,
       visible: map.hasLayer(l.mapLayerGroup), removable:false, renamable:false,
       getLayer: ()=> l.mapLayerGroup,
+      setLayer: (nl)=>{ l.mapLayerGroup = nl; l.color = l.sym.color; },
       getGeoJSON: ()=> l.lastGeoJSON,
       toggleVisible:(v)=>{ l.visible = v; if(v) l.mapLayerGroup.addTo(map); else map.removeLayer(l.mapLayerGroup); },
-      // Flattens any per-feature category colouring (e.g. GDE High/Medium/Low)
-      // into one single-symbol colour — editing symbology here trades away
-      // the auto-categorised legend for direct control, same tradeoff as
-      // switching a QGIS layer from a categorized to a single-symbol renderer.
-      setColor:(c)=>{ l.color = c; l.mapLayerGroup.setStyle({ color:c, fillColor:c }); },
-      setOpacity:(o)=>{ l.workspaceOpacity = o; l.mapLayerGroup.setStyle({ fillOpacity:o }); },
     });
   });
 
   aiUploadedLayers.forEach(u=>{
+    u.sym = u.sym || aiDefaultSym(u.color, u.opacity);
     entries.push({
-      kind:'uploaded', name: u.name,
-      color: u.color, opacity: u.opacity,
+      kind:'uploaded', name: u.name, sym: u.sym,
       visible: map.hasLayer(u.mapLayerGroup), removable:true, renamable:true,
       getLayer: ()=> u.mapLayerGroup,
+      setLayer: (nl)=>{ u.mapLayerGroup = nl; },
       getGeoJSON: ()=> u.geojson,
       toggleVisible:(v)=>{ if(v) u.mapLayerGroup.addTo(map); else map.removeLayer(u.mapLayerGroup); },
-      setColor:(c)=>{ u.color = c; u.mapLayerGroup.setStyle({ color:c, fillColor:c }); },
-      setOpacity:(o)=>{ u.opacity = o; u.mapLayerGroup.setStyle({ fillOpacity:o }); },
       setName:(n)=>{ u.name = n; },
       remove:()=>{ map.removeLayer(u.mapLayerGroup); aiUploadedLayers = aiUploadedLayers.filter(x=>x!==u); },
     });
   });
 
   Object.entries(aiGisResultLayers).forEach(([id, entry])=>{
+    entry.sym = entry.sym || aiDefaultSym(entry.color, entry.opacity);
     entries.push({
-      kind:'ai_result', name: entry.name,
-      color: entry.color, opacity: entry.opacity,
+      kind:'ai_result', name: entry.name, sym: entry.sym,
       visible: map.hasLayer(entry.mapLayerGroup), removable:true, renamable:true,
       getLayer: ()=> entry.mapLayerGroup,
+      setLayer: (nl)=>{ entry.mapLayerGroup = nl; },
       getGeoJSON: ()=> entry.geojson,
       toggleVisible:(v)=>{ if(v) entry.mapLayerGroup.addTo(map); else map.removeLayer(entry.mapLayerGroup); },
-      setColor:(c)=>{ entry.color = c; entry.mapLayerGroup.setStyle({ color:c, fillColor:c }); },
-      setOpacity:(o)=>{ entry.opacity = o; entry.mapLayerGroup.setStyle({ fillOpacity:o }); },
       setName:(n)=>{ entry.name = n; },
       remove:()=>{ map.removeLayer(entry.mapLayerGroup); delete aiGisResultLayers[id]; },
     });
@@ -6862,21 +7014,42 @@ function getAiWorkspaceEntries(){
   return entries;
 }
 
+// Rebuilds a workspace entry's Leaflet layer from its current `sym`
+// state and swaps it in on the map — the one path every symbology
+// change (colour, opacity, categorized field, fill style) goes through.
+function aiApplySymbology(entry){
+  const oldLayer = entry.getLayer();
+  const wasVisible = oldLayer ? map.hasLayer(oldLayer) : true;
+  const newLayer = aiBuildStyledLayer(entry.getGeoJSON(), entry.sym, entry.name);
+  if(oldLayer) map.removeLayer(oldLayer);
+  if(wasVisible) newLayer.addTo(map);
+  entry.setLayer(newLayer);
+}
+
+function aiSwatchGradientStops(sym){
+  const colors = Object.values(sym.categories).filter(c=>c.visible!==false).slice(0,6).map(c=>c.color);
+  return colors.length ? colors.join(',') : sym.otherColor;
+}
+
 function renderAiLayerTree(){
   const el = document.getElementById('aiLayerTreeList');
   const entries = getAiWorkspaceEntries();
-  el.innerHTML = entries.map((e, i) => `
+  el.innerHTML = entries.map((e, i) => {
+    const swatchStyle = e.sym.mode === 'categorized'
+      ? `background:linear-gradient(90deg, ${aiSwatchGradientStops(e.sym)});opacity:${e.sym.opacity}`
+      : `background:${e.sym.color};opacity:${e.sym.opacity}`;
+    return `
     <div class="ai-layer-row" data-idx="${i}">
       <input type="checkbox" ${e.visible ? 'checked' : ''} data-action="toggle" title="Show/hide">
-      <button class="ai-layer-swatch-btn" data-action="symbology" style="background:${e.color || '#999999'};opacity:${e.opacity}" title="Layer properties — symbology"></button>
+      <button class="ai-layer-swatch-btn" data-action="symbology" style="${swatchStyle}" title="Layer properties — symbology"></button>
       ${e.renamable
         ? `<input type="text" class="ai-layer-name-input" value="${xmlEscape(e.name)}" data-action="rename">`
         : `<span class="ai-layer-name" title="${xmlEscape(e.name)}">${xmlEscape(e.name)}</span>`}
       <button class="icon-btn" data-action="table" title="View attribute table">&#9776;</button>
       <button class="icon-btn" data-action="zoom" title="Zoom to layer">&#8982;</button>
       ${e.removable ? `<button class="icon-btn del" data-action="remove" title="Remove">&times;</button>` : ''}
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   el.querySelectorAll('.ai-layer-row').forEach(row=>{
     const entry = entries[+row.dataset.idx];
@@ -6900,63 +7073,185 @@ function renderAiLayerTree(){
 
 /* =========================================================
    "Layer Properties — Symbology" dialog, modelled on QGIS's own
-   layer properties panel: a preview swatch, a colour picker, and
-   an opacity slider+percentage, with live preview on the map as
-   you adjust either one (same as QGIS), Cancel reverting to
-   whatever the layer looked like when the dialog opened.
+   layer properties panel: Single Symbol or Categorized (auto-coloured
+   per distinct value of a chosen field, each checkable/recolourable),
+   a fill style (solid or one of three hatch patterns), and an opacity
+   slider+percentage — with live preview on the map as you adjust any
+   of it (same as QGIS), Cancel reverting to how the layer looked when
+   the dialog opened.
 ========================================================= */
 let aiSymbologyEntry = null;
-let aiSymbologyOriginal = null; // { color, opacity } snapshot, for Cancel
+let aiSymbologyOriginalSym = null; // deep snapshot, for Cancel
+const AI_CAT_VALUE_CAP = 60; // generous but bounded, same spirit as QGIS's own warning past a few hundred
+
+function cloneSym(sym){
+  return { ...sym, categories: Object.fromEntries(Object.entries(sym.categories).map(([k,v])=>[k,{...v}])) };
+}
+function restoreSymInPlace(sym, snapshot){
+  sym.mode = snapshot.mode; sym.color = snapshot.color; sym.opacity = snapshot.opacity;
+  sym.fillStyle = snapshot.fillStyle; sym.field = snapshot.field; sym.otherColor = snapshot.otherColor;
+  sym.categories = Object.fromEntries(Object.entries(snapshot.categories).map(([k,v])=>[k,{...v}]));
+}
 
 function openAiSymbologyModal(entry){
   aiSymbologyEntry = entry;
-  aiSymbologyOriginal = { color: entry.color, opacity: entry.opacity };
+  aiSymbologyOriginalSym = cloneSym(entry.sym);
   document.getElementById('aiSymbologyTitle').textContent = `Layer Properties — ${entry.name} — Symbology`;
-  document.getElementById('aiSymbologyColor').value = entry.color || '#999999';
-  document.getElementById('aiSymbologyOpacityRange').value = Math.round((entry.opacity ?? 1) * 100);
-  document.getElementById('aiSymbologyOpacityNum').value = Math.round((entry.opacity ?? 1) * 100);
+  document.getElementById('aiSymbologyMode').value = entry.sym.mode;
+  document.getElementById('aiSymbologyColor').value = entry.sym.color;
+  document.getElementById('aiSymbologyFillStyle').value = entry.sym.fillStyle;
+  document.getElementById('aiSymbologyOpacityRange').value = Math.round(entry.sym.opacity * 100);
+  document.getElementById('aiSymbologyOpacityNum').value = Math.round(entry.sym.opacity * 100);
+
+  const fieldSelect = document.getElementById('aiSymbologyCatField');
+  const geojson = entry.getGeoJSON();
+  const fields = (geojson.features[0] && Object.keys(geojson.features[0].properties || {})) || [];
+  fieldSelect.innerHTML = fields.map(f=>`<option value="${xmlEscape(f)}">${xmlEscape(f)}</option>`).join('');
+  if(entry.sym.field && fields.includes(entry.sym.field)) fieldSelect.value = entry.sym.field;
+  else if(fields.length) entry.sym.field = fields[0];
+
+  updateAiSymbologyModeVisibility();
+  if(entry.sym.mode === 'categorized') aiEnsureCategoriesPopulated();
+  renderAiCategoryList();
   updateAiSymbologyPreview();
   document.getElementById('aiSymbologyModal').classList.add('show');
 }
 
+function updateAiSymbologyModeVisibility(){
+  const mode = document.getElementById('aiSymbologyMode').value;
+  document.getElementById('aiSymbologySingleColorField').style.display = mode === 'single' ? '' : 'none';
+  document.getElementById('aiSymbologyCategorizedFields').style.display = mode === 'categorized' ? '' : 'none';
+}
+
+// Scans the layer's real feature values for the chosen field and adds
+// one category per distinct value (capped), auto-coloured from the same
+// golden-angle palette the rest of the app uses — a value that already
+// has a colour (unchanged field) keeps it rather than being regenerated.
+function aiEnsureCategoriesPopulated(){
+  const entry = aiSymbologyEntry;
+  const field = document.getElementById('aiSymbologyCatField').value;
+  entry.sym.field = field;
+  const geojson = entry.getGeoJSON();
+  const seen = [];
+  const seenSet = new Set();
+  (geojson.features || []).forEach(f=>{
+    const val = String((f.properties||{})[field]);
+    if(!seenSet.has(val)){ seenSet.add(val); seen.push(val); }
+  });
+  seen.slice(0, AI_CAT_VALUE_CAP).forEach((val, i)=>{
+    if(!entry.sym.categories[val]) entry.sym.categories[val] = { color: categoricalColor(i), visible: true };
+  });
+  Object.keys(entry.sym.categories).forEach(k=>{ if(!seenSet.has(k)) delete entry.sym.categories[k]; });
+}
+
+function renderAiCategoryList(){
+  const entry = aiSymbologyEntry;
+  const el = document.getElementById('aiSymbologyCatList');
+  const rows = Object.entries(entry.sym.categories);
+  el.innerHTML = rows.map(([val, cat])=>`
+    <div class="sym-cat-row" data-value="${xmlEscape(val)}">
+      <input type="checkbox" ${cat.visible !== false ? 'checked':''} data-cat-action="toggle">
+      <input type="color" value="${cat.color}" data-cat-action="color">
+      <span class="sym-cat-label" title="${xmlEscape(val)}">${xmlEscape(val)}</span>
+    </div>`).join('');
+  el.querySelectorAll('.sym-cat-row').forEach(row=>{
+    const val = row.dataset.value;
+    row.querySelector('[data-cat-action=toggle]').addEventListener('change', e=>{
+      entry.sym.categories[val].visible = e.target.checked;
+      aiApplySymbology(entry); updateAiSymbologyPreview(); renderAiLayerTree();
+    });
+    row.querySelector('[data-cat-action=color]').addEventListener('input', ()=> aiSymbologyCatColorChanged(val, row));
+  });
+}
+const aiSymbologyCatColorChanged = debounce((val, row)=>{
+  const entry = aiSymbologyEntry;
+  if(!entry) return;
+  entry.sym.categories[val].color = row.querySelector('[data-cat-action=color]').value;
+  aiApplySymbology(entry); updateAiSymbologyPreview(); renderAiLayerTree();
+}, 150);
+
 function closeAiSymbologyModal(){
   document.getElementById('aiSymbologyModal').classList.remove('show');
   aiSymbologyEntry = null;
-  aiSymbologyOriginal = null;
+  aiSymbologyOriginalSym = null;
 }
 
 function updateAiSymbologyPreview(){
-  const color = document.getElementById('aiSymbologyColor').value;
-  const opacity = +document.getElementById('aiSymbologyOpacityRange').value / 100;
-  document.getElementById('aiSymbologyPreview').style.background = color;
-  document.getElementById('aiSymbologyPreview').style.opacity = opacity;
+  const entry = aiSymbologyEntry;
+  if(!entry) return;
+  const preview = document.getElementById('aiSymbologyPreview');
+  preview.style.background = entry.sym.mode === 'categorized'
+    ? `linear-gradient(90deg, ${aiSwatchGradientStops(entry.sym)})`
+    : entry.sym.color;
+  preview.style.opacity = entry.sym.opacity;
 }
 
+const aiApplySymbologyDebounced = debounce(()=>{
+  if(!aiSymbologyEntry) return;
+  aiApplySymbology(aiSymbologyEntry);
+  renderAiLayerTree();
+}, 150);
+
+document.getElementById('aiSymbologyMode').addEventListener('change', e=>{
+  if(!aiSymbologyEntry) return;
+  aiSymbologyEntry.sym.mode = e.target.value;
+  updateAiSymbologyModeVisibility();
+  if(e.target.value === 'categorized') aiEnsureCategoriesPopulated();
+  renderAiCategoryList();
+  aiApplySymbology(aiSymbologyEntry);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyCatField').addEventListener('change', ()=>{
+  if(!aiSymbologyEntry) return;
+  aiSymbologyEntry.sym.categories = {}; // field changed — old values/colours don't apply
+  aiEnsureCategoriesPopulated();
+  renderAiCategoryList();
+  aiApplySymbology(aiSymbologyEntry);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
+document.getElementById('aiSymbologyRandomize').addEventListener('click', ()=>{
+  if(!aiSymbologyEntry) return;
+  let i = Math.floor(Math.random()*40);
+  Object.values(aiSymbologyEntry.sym.categories).forEach(cat=>{ cat.color = categoricalColor(i++); });
+  renderAiCategoryList();
+  aiApplySymbology(aiSymbologyEntry);
+  updateAiSymbologyPreview();
+  renderAiLayerTree();
+});
 document.getElementById('aiSymbologyColor').addEventListener('input', e=>{
   if(!aiSymbologyEntry) return;
-  aiSymbologyEntry.setColor(e.target.value);
+  aiSymbologyEntry.sym.color = e.target.value;
+  updateAiSymbologyPreview();
+  aiApplySymbologyDebounced();
+});
+document.getElementById('aiSymbologyFillStyle').addEventListener('change', e=>{
+  if(!aiSymbologyEntry) return;
+  aiSymbologyEntry.sym.fillStyle = e.target.value;
+  aiApplySymbology(aiSymbologyEntry);
   updateAiSymbologyPreview();
   renderAiLayerTree();
 });
 document.getElementById('aiSymbologyOpacityRange').addEventListener('input', e=>{
   if(!aiSymbologyEntry) return;
   document.getElementById('aiSymbologyOpacityNum').value = e.target.value;
-  aiSymbologyEntry.setOpacity(+e.target.value / 100);
+  aiSymbologyEntry.sym.opacity = +e.target.value / 100;
   updateAiSymbologyPreview();
-  renderAiLayerTree();
+  aiApplySymbologyDebounced();
 });
 document.getElementById('aiSymbologyOpacityNum').addEventListener('input', e=>{
   if(!aiSymbologyEntry) return;
   let v = Math.max(0, Math.min(100, +e.target.value || 0));
   document.getElementById('aiSymbologyOpacityRange').value = v;
-  aiSymbologyEntry.setOpacity(v / 100);
+  aiSymbologyEntry.sym.opacity = v / 100;
   updateAiSymbologyPreview();
-  renderAiLayerTree();
+  aiApplySymbologyDebounced();
 });
 document.getElementById('aiSymbologyCancel').addEventListener('click', ()=>{
-  if(aiSymbologyEntry && aiSymbologyOriginal){
-    aiSymbologyEntry.setColor(aiSymbologyOriginal.color);
-    aiSymbologyEntry.setOpacity(aiSymbologyOriginal.opacity);
+  if(aiSymbologyEntry && aiSymbologyOriginalSym){
+    restoreSymInPlace(aiSymbologyEntry.sym, aiSymbologyOriginalSym);
+    aiApplySymbology(aiSymbologyEntry);
   }
   closeAiSymbologyModal();
   renderAiLayerTree();
@@ -6965,19 +7260,14 @@ document.getElementById('aiSymbologyApply').addEventListener('click', ()=>{
   // Values are already applied live as the dialog's own inputs change
   // (same as QGIS) — Apply just re-baselines Cancel's revert point so a
   // Cancel after this only undoes changes made since the last Apply.
-  if(aiSymbologyEntry) aiSymbologyOriginal = { color: aiSymbologyEntry.color, opacity: aiSymbologyEntry.opacity };
+  if(aiSymbologyEntry) aiSymbologyOriginalSym = cloneSym(aiSymbologyEntry.sym);
 });
 document.getElementById('aiSymbologyOk').addEventListener('click', ()=>{
   closeAiSymbologyModal();
   renderAiLayerTree();
 });
 document.getElementById('aiSymbologyClose').addEventListener('click', ()=>{
-  if(aiSymbologyEntry && aiSymbologyOriginal){
-    aiSymbologyEntry.setColor(aiSymbologyOriginal.color);
-    aiSymbologyEntry.setOpacity(aiSymbologyOriginal.opacity);
-  }
-  closeAiSymbologyModal();
-  renderAiLayerTree();
+  document.getElementById('aiSymbologyCancel').click();
 });
 
 function handleAiDatasetUpload(file){
