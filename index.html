@@ -1389,13 +1389,6 @@ function bufferGeomFor(lyr){ return lyr.cat === 'context' ? contextGeom : assess
    where CORS doesn't apply at all.
 ========================================================= */
 const LOCAL_PROXY = 'https://groundpatch-proxy.maxstratton12.workers.dev/?url=';
-// Overpass is deliberately NOT in this list (see the Overpass section
-// further down) - it already sends proper CORS headers for this exact
-// request shape, and public Overpass mirrors queue/rate-limit by source
-// IP, so routing every user's query through one shared Worker IP here
-// makes that queuing far more likely to trip (showing up as our own
-// client-side timeout, not a CORS error) than letting each browser hit
-// Overpass directly under its own IP.
 const PROXY_HOSTS = ['spatialportalarcgis.dpie.nsw.gov.au', 'lmbc.nsw.gov.au', 'mapprod2.environment.nsw.gov.au', 'mapprod3.environment.nsw.gov.au', 'maps.six.nsw.gov.au', 'gis.environment.gov.au', 'data.bionet.nsw.gov.au'];
 function needsProxy(url){
   try{ return PROXY_HOSTS.some(h => new URL(url).hostname.endsWith(h)); }
@@ -1442,9 +1435,7 @@ let layers = [
   { name:"Riparian Buffer (Strahler)", cat:"ecology", color:"#7EC3E0", noCategorize:true,
     derived:true, sourceLayer:"Strahler Stream Order", on:true },
   { name:"IBRA Subregions", cat:"ecology", color:"#7A5C8E", field:"SUB_NAME_7",
-    url:"https://gis.environment.gov.au/gispubmap/rest/services/ogc_services/IBRA7_Subregions/MapServer", id:0, on:true },
-  { name:"Roads (OpenStreetMap)", cat:"context", color:"#4A4A4A", bufferKm:CONTEXT_BUFFER_KM, noCategorize:true,
-    osm:true, osmFilter:'way["highway"]', dissolveField:"name", on:true }
+    url:"https://gis.environment.gov.au/gispubmap/rest/services/ogc_services/IBRA7_Subregions/MapServer", id:0, on:true }
 ];
 
 // Strahler order -> riparian buffer width in metres, per the team's standard:
@@ -1677,8 +1668,8 @@ async function arcgisFetchJSON(url){
 
 async function attemptArcgisFetchJSON(url){
   console.log('[address/lot search] requesting:', url);
-  // Same fix as postQuery()/postOverpassQuery() for the same failure mode:
-  // without a timeout, a stalled address/Lot-DP server left the Search
+  // Same fix as postQuery() for the same failure mode: without a
+  // timeout, a stalled address/Lot-DP server left the Search
   // button stuck on "Searching…" (or the suggestions dropdown silently
   // never appearing) forever, with no way to recover short of reloading.
   const controller = new AbortController();
@@ -2523,81 +2514,12 @@ function toEsriRings(geom){
   return { rings, spatialReference:{ wkid:4326 } };
 }
 
-/* =========================================================
-   Roads via OpenStreetMap's Overpass API — used instead of an ArcGIS
-   layer since Esri's public World_Transportation service is a
-   pre-rendered tile basemap (Map,Tilemap only — no Query capability,
-   so there's no way to fetch actual road geometry/names from it).
-   Overpass is free, publicly queryable, and CORS-enabled for exactly
-   this kind of client-side use (the same backend QuickOSM uses).
-========================================================= */
-// Multiple public instances, tried in order. overpass-api.de is deliberately
-// excluded — confirmed via a direct browser request (no app/proxy involved)
-// to return a hard Apache-level 406 on every subdomain, so retrying it here
-// just wastes the per-layer timeout below for zero chance of success.
-const OVERPASS_ENDPOINTS = [
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter',
-];
-// Each endpoint gets its own timeout — without one, a hung connection to a
-// single bad Overpass mirror blocks every layer queried after it, since
-// runAll() queries layers one at a time. This was silently stalling "Fetch
-// site data" indefinitely on the old single-endpoint, no-timeout version.
-const OVERPASS_TIMEOUT_MS = 30000;
-
-function largestRing(geom){
-  const rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(p => p[0]);
-  return rings.reduce((a,b) => b.length > a.length ? b : a);
-}
-
-// Overpass's "poly" filter wants "lat lon lat lon ..." (space-separated, lat first)
-function ringToOverpassPoly(ring){
-  return ring.map(([lon,lat]) => `${lat} ${lon}`).join(' ');
-}
-
-async function postOverpassQuery(query){
-  const attempts = [];
-  for(const endpoint of OVERPASS_ENDPOINTS){
-    const controller = new AbortController();
-    const timer = setTimeout(()=> controller.abort(), OVERPASS_TIMEOUT_MS);
-    try{
-      const resp = await fetch(withProxy(endpoint), {
-        method:'POST',
-        headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-        signal: controller.signal
-      });
-      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return await resp.json();
-    }catch(err){
-      const msg = err.name === 'AbortError' ? `timed out after ${OVERPASS_TIMEOUT_MS/1000}s` : err.message;
-      attempts.push(`${endpoint}: ${msg}`);
-    }finally{
-      clearTimeout(timer);
-    }
-  }
-  throw new Error(`All Overpass endpoints failed — ${attempts.join(' | ')}`);
-}
-
-async function queryOsmRoads(lyr){
-  const poly = ringToOverpassPoly(largestRing(bufferGeomFor(lyr)));
-  const query = `[out:json][timeout:25];${lyr.osmFilter}(poly:"${poly}");out geom;`;
-  const json = await postOverpassQuery(query);
-  const features = (json.elements || [])
-    .filter(el => el.type === 'way' && el.geometry && el.geometry.length > 1)
-    .map(el => ({
-      type:'Feature',
-      properties: el.tags || {},
-      geometry:{ type:'LineString', coordinates: el.geometry.map(pt => [pt.lon, pt.lat]) }
-    }));
-  return { type:'FeatureCollection', features };
-}
-
-// Merge same-named features (e.g. road segments split at every intersection)
-// into one feature per name, so the export has one row per road instead of
-// dozens of fragments. Not a true geometric line-merge — it combines the
-// segments into a single MultiLineString per name via turf.combine(), which
-// is enough to collapse the attribute table down to one row per road name.
+// Merges same-named features into one feature per name — used by any layer
+// config that sets `dissolveField` (no current layer does, but it stays
+// available via "+ Add a layer"). Not a true geometric line-merge — it
+// combines the segments into a single MultiLineString/MultiPolygon per name
+// via turf.combine(), which is enough to collapse the attribute table down
+// to one row per name.
 function dissolveByField(gj, field){
   const groups = new Map();
   (gj.features || []).forEach(f=>{
@@ -2626,9 +2548,8 @@ function dissolveByField(gj, field){
 // runAll()), so a single retry here only costs that one layer's own time,
 // not the whole "Fetch site data" run — worth it to ride out a transient
 // blip on a government server rather than forcing the user to click the
-// button again for one layer out of nine.
+// button again for one layer out of eight.
 async function queryLayer(lyr){
-  if(lyr.osm) return queryOsmRoads(lyr);
   try{
     return await attemptQueryLayer(lyr);
   }catch(err){
@@ -2690,10 +2611,9 @@ async function postQuery(endpointUrl, params){
   }catch(err){
     // A stalled/unresponsive government server used to hang this fetch
     // forever, blocking every subsequent layer since they're queried one
-    // at a time — same failure mode the Overpass endpoints had before
-    // postOverpassQuery() got a timeout. This is that same fix applied to
-    // the ArcGIS query path (queryLayerByIds and queryLayerSimple both
-    // route every request through this one function).
+    // at a time. queryLayerByIds and queryLayerSimple both route every
+    // request through this one function, so the timeout only needs
+    // handling here.
     if(err.name === 'AbortError') throw new Error(`timed out after ${ARCGIS_QUERY_TIMEOUT_MS/1000}s`);
     throw err;
   }finally{
@@ -2786,13 +2706,7 @@ async function queryLayerByIds(lyr){
       objectIds: chunkIds.join(','),
       outSR:'4326',
       outFields:'*',
-      returnGeometry:'true',
-      // 6 decimal degrees is ~11cm at this latitude — far finer than this
-      // app needs, but it shrinks the response substantially for a
-      // vertex-dense layer like SVTM's vegetation polygons, which were
-      // timing out/failing through the proxy well before coarser-geometry
-      // layers like cadastre or GDE ever did.
-      geometryPrecision:'6'
+      returnGeometry:'true'
     });
     try{
       const resp = await postQuery(endpoint, params);
@@ -2847,8 +2761,7 @@ async function queryLayerSimple(lyr){
     outSR:'4326',
     spatialRel:'esriSpatialRelIntersects',
     outFields:'*',
-    returnGeometry:'true',
-    geometryPrecision:'6'
+    returnGeometry:'true'
   });
   const resp = await postQuery(endpoint, params);
   const gj = await resp.json();
@@ -3569,7 +3482,7 @@ async function runAll(){
 /* =========================================================
    Chat — grounded strictly in the layers that were actually queried
    and clipped to the assessment buffer this run (excludes the
-   context-only layers like Cadastre/Roads, which use the smaller
+   context-only layers like Cadastre, which use the smaller
    CONTEXT_BUFFER_KM buffer instead). Only an attribute-level summary
    is sent, not raw geometry — reuses summarizeFeatures() (the same
    grouping already used for the on-screen result cards), so identical
@@ -3934,8 +3847,8 @@ function groupClippedFeaturesForConstraints(features, lyr){
 }
 
 // Only polygon layers that were actually queried against the assessment
-// area AND intersect the subject site boundary — line layers (Roads,
-// Watercourses, Strahler) don't have an "area" to assign to a tier, and
+// area AND intersect the subject site boundary — line layers (Watercourses,
+// Strahler) don't have an "area" to assign to a tier, and
 // context-only layers (Cadastre) aren't ecological constraints.
 function getConstraintLayerOptions(){
   if(!boundaryGeom) return [];
