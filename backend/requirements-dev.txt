@@ -1,0 +1,5 @@
+# Test-only dependencies, on top of requirements.txt. httpx is required by
+# FastAPI's TestClient (starlette.testclient wraps it), not by the app itself.
+-r requirements.txt
+pytest==8.3.4
+httpx==0.28.1

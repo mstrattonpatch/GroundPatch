@@ -1,0 +1,10 @@
+# Orchestration layer only — the FastAPI app, job lifecycle, validation and
+# (eventually) the AI planning call. Installable with plain pip, anywhere.
+#
+# Deliberately does NOT include anything QGIS-related — PyQGIS is not a pip
+# package. See environment-qgis.yml and README.md ("GIS engine: PyQGIS") for
+# the separate, conda-based environment that app/gis_worker.py needs once its
+# stubs are turned into real implementations.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
