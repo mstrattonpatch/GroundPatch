@@ -2918,10 +2918,28 @@ function clipFeatureToBuffer(feature, bufferGeom){
         // on complex, vertex-dense real-world polygons (seen with government
         // datasets like SVTM's vegetation layer, especially against the
         // many-vertex rounded buffer ring) even when the shapes genuinely
-        // overlap. booleanIntersects uses a different, more robust test as a
-        // safety net - if it disagrees with intersect's null, keep the
-        // unclipped feature rather than silently dropping a real match.
-        return turf.booleanIntersects(feature, bufferFeature) ? feature : null;
+        // overlap. Real-world case this hit: SVTM's "not classified"
+        // catch-all PCT polygon can be enormous (hundreds of km²) — the old
+        // fallback kept it entirely UNCLIPPED whenever intersect failed,
+        // which on a small site reported that PCT's area as thousands of
+        // times the site's actual size. Same fix as the line branch below:
+        // bboxClip first bounds the worst case to the buffer's bounding
+        // box, then retries the real intersect on that now much-simpler
+        // geometry (often succeeds where the original complex polygon
+        // failed) before settling for the bbox-clipped approximation.
+        if(!turf.booleanIntersects(feature, bufferFeature)) return null;
+        try{
+          const bufferBbox = turf.bbox(bufferFeature);
+          const bboxClipped = turf.bboxClip(turf.feature(feature.geometry), bufferBbox);
+          if(bboxClipped.geometry && bboxClipped.geometry.coordinates.length){
+            try{
+              const reclipped = turf.intersect(bboxClipped, bufferFeature);
+              if(reclipped) return { type:'Feature', properties: feature.properties, geometry: reclipped.geometry };
+            }catch(e){ /* fall through to the bbox-clipped result below */ }
+            return { type:'Feature', properties: feature.properties, geometry: bboxClipped.geometry };
+          }
+        }catch(e){ /* fall through to the unclipped feature - last resort */ }
+        return feature;
       }
       return { type:'Feature', properties: feature.properties, geometry: clipped.geometry };
     }
