@@ -649,21 +649,6 @@
   @keyframes gp-spin{ to{ transform:rotate(360deg); } }
   #loadingOverlay.show{ display:flex; }
 
-  /* ---------- Export list (GeoJSON / Shapefile) ---------- */
-  #exportList{ border:1px solid var(--line); border-radius:var(--radius); padding:0 12px; }
-  #exportList:empty{ display:none; }
-  .export-row{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 0; border-bottom:1px solid var(--line); font-size:12px;
-  }
-  .export-row:last-child{ border-bottom:none; }
-  .export-row .name{ flex:1; }
-  .export-row button{
-    font-family:inherit; font-size:11px; font-weight:600; color:var(--ink);
-    padding:5px 9px; border:1px solid var(--line-strong); background:var(--panel); border-radius:6px; cursor:pointer;
-  }
-  .export-row button:hover{ border-color:var(--ink); }
-  .export-row button:disabled{ color:#BCC1BD; cursor:default; border-color:var(--line); }
 
   /* ---------- Figure stage (matches Kembla_Grange_A4_Portrait.qpt) ---------- */
   #figureStage{
@@ -1219,9 +1204,8 @@
 
     <section id="exportSection" style="display:none;">
       <h2>Export data</h2>
-      <button class="primary" id="downloadAllZip">Export assessment package (.zip)</button>
-      <div id="exportList" style="margin-top:12px;"></div>
-      <button class="secondary" id="exportReportXlsx">Export report (.xlsx)</button>
+      <button class="primary" id="downloadAllShapefiles">Export all layers (.shp)</button>
+      <button class="secondary" id="exportReportXlsx" style="margin-top:12px;">Export report (.xlsx)</button>
       <button class="secondary" id="exportSiteReportDocx" style="margin-top:6px;">Generate site constraints report (.docx)</button>
       <button class="textbtn" id="viewQgisScript">View QGIS styling script</button>
     </section>
@@ -1493,9 +1477,9 @@ let assessmentGeom = null; // 5km rounded buffer — used for querying/clipping 
 let assessmentLayer = null;
 let contextGeom = null;    // rounded buffer for context-only layers (e.g. cadastre) — adjustable via the sidebar slider, up to 2km
 let contextLayer = null;
-// Plain text of the last run's summary report — no longer shown on screen,
-// kept only so the exported assessment package's report.txt has something
-// to write (see buildPackageReadme()/downloadAllZip's handler).
+// Plain text of the last run's summary report — not shown on screen or
+// exported directly; the per-layer detail it's built from feeds reportLines
+// below for diagnostics only.
 let lastReportText = '';
 // Both mutable (not const) — user-adjustable via their own sliders:
 // ASSESSMENT_BUFFER_KM via wireAssessmentBufferSlider() below, CONTEXT_BUFFER_KM
@@ -3622,12 +3606,11 @@ async function runAll(){
   `;
 
   // No longer shown on screen (the detail belongs in the generated
-  // report/Excel export, not duplicated live in the UI) - kept as plain
-  // text for report.txt in the exported assessment package.
+  // report/Excel export, not duplicated live in the UI).
   lastReportText = reportLines.join('\n');
 
   renderLayerList();
-  renderExportList();
+  onSiteDataFetched();
 
   // Reset the chat on every fresh query — the grounded data it can
   // see has just changed, so a carried-over conversation would answer
@@ -3864,9 +3847,12 @@ function downloadBlob(filename, content, type){
   setTimeout(()=> URL.revokeObjectURL(url), 2000);
 }
 
-function renderExportList(){
-  const el = document.getElementById('exportList');
-  el.innerHTML = '';
+// Despite the name, this isn't just about the export section any more (it
+// used to also build the per-layer GeoJSON/Shapefile row list, now gone in
+// favour of one "Export all layers (.shp)" button) — kept as the one place
+// that resets every section whose data goes stale the moment a new site is
+// fetched, which still needs to happen regardless.
+function onSiteDataFetched(){
   document.getElementById('exportSection').style.display = 'block';
 
   // New site data means any previously generated constraint layer is stale.
@@ -3896,83 +3882,6 @@ function renderExportList(){
   // (independent of "Fetch site data") also needs a fresh buffer.
   document.getElementById('koalaSightingsSection').style.display = 'block';
   document.getElementById('koalaFetchStatus').textContent = '';
-
-  const boundaryRow = document.createElement('div');
-  boundaryRow.className = 'export-row';
-  boundaryRow.innerHTML = `<span class="name">Site boundary</span>
-    <button data-kind="geojson-boundary">GeoJSON</button>
-    <button data-kind="shp-boundary">Shapefile</button>`;
-  el.appendChild(boundaryRow);
-  boundaryRow.querySelector('[data-kind=geojson-boundary]').addEventListener('click', ()=>{
-    const feature = { type:'Feature', properties:{ name:'Site boundary' }, geometry: boundaryGeom };
-    downloadBlob('site-boundary.geojson', JSON.stringify(feature), 'application/geo+json');
-  });
-  boundaryRow.querySelector('[data-kind=shp-boundary]').addEventListener('click', ()=>{
-    exportShapefile({ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Site boundary' }, geometry: boundaryGeom }] }, 'site-boundary', { color:'#E81717', noCategorize:true, outlineOnly:true });
-  });
-
-  const bufferRow = document.createElement('div');
-  bufferRow.className = 'export-row';
-  bufferRow.innerHTML = `<span class="name">${ASSESSMENT_BUFFER_KM}km assessment buffer</span>
-    <button data-kind="geojson-buffer">GeoJSON</button>
-    <button data-kind="shp-buffer">Shapefile</button>`;
-  el.appendChild(bufferRow);
-  bufferRow.querySelector('[data-kind=geojson-buffer]').addEventListener('click', ()=>{
-    const feature = { type:'Feature', properties:{ name:ASSESSMENT_BUFFER_KM+'km assessment buffer' }, geometry: assessmentGeom };
-    downloadBlob('assessment-buffer-' + ASSESSMENT_BUFFER_KM + 'km.geojson', JSON.stringify(feature), 'application/geo+json');
-  });
-  bufferRow.querySelector('[data-kind=shp-buffer]').addEventListener('click', ()=>{
-    exportShapefile({ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Assessment buffer' }, geometry: assessmentGeom }] }, 'assessment-buffer', { color:'#000000', noCategorize:true, outlineOnly:true });
-  });
-
-  const contextRow = document.createElement('div');
-  contextRow.className = 'export-row';
-  contextRow.innerHTML = `<span class="name">${CONTEXT_BUFFER_KM*1000}m context buffer</span>
-    <button data-kind="geojson-context">GeoJSON</button>
-    <button data-kind="shp-context">Shapefile</button>`;
-  el.appendChild(contextRow);
-  contextRow.querySelector('[data-kind=geojson-context]').addEventListener('click', ()=>{
-    const feature = { type:'Feature', properties:{ name:(CONTEXT_BUFFER_KM*1000)+'m context buffer' }, geometry: contextGeom };
-    downloadBlob('context-buffer-' + (CONTEXT_BUFFER_KM*1000) + 'm.geojson', JSON.stringify(feature), 'application/geo+json');
-  });
-  contextRow.querySelector('[data-kind=shp-context]').addEventListener('click', ()=>{
-    exportShapefile({ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Context buffer' }, geometry: contextGeom }] }, 'context-buffer', { color:'#FFAA00', noCategorize:true, outlineOnly:true });
-  });
-
-  layers.filter(l=>l.lastGeoJSON).forEach(lyr=>{
-    const row = document.createElement('div');
-    row.className = 'export-row';
-    const slug = lyr.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
-    row.innerHTML = `<span class="name">${lyr.name}</span>
-      <button data-geo>GeoJSON</button>
-      <button data-csv>CSV</button>
-      <button data-shp>Shapefile</button>`;
-    el.appendChild(row);
-    row.querySelector('[data-geo]').addEventListener('click', ()=>{
-      downloadBlob(slug + '.geojson', JSON.stringify(lyr.lastGeoJSON), 'application/geo+json');
-    });
-    row.querySelector('[data-csv]').addEventListener('click', ()=>{
-      downloadBlob(slug + '.csv', geojsonToCSV(lyr.lastGeoJSON), 'text/csv');
-    });
-    row.querySelector('[data-shp]').addEventListener('click', (e)=>{
-      exportShapefile(lyr.lastGeoJSON, slug, { field: lyr.field, color: lyr.color, noCategorize: lyr.noCategorize, colorMap: lyr.colorMap, widthMap: lyr.widthMap, outlineOnly: lyr.outlineOnly }, e.target);
-    });
-  });
-}
-
-// Flatten a layer's attribute table to CSV — the format ecologists actually
-// want for stats/R/Excel, since GeoJSON properties aren't directly usable there.
-function geojsonToCSV(gj){
-  const rows = gj.features.map(f => f.properties || {});
-  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))];
-  const esc = v => {
-    if(v === null || v === undefined) return '';
-    const s = String(v).replace(/"/g, '""');
-    return /[",\n]/.test(s) ? `"${s}"` : s;
-  };
-  const lines = [keys.join(',')];
-  rows.forEach(r => lines.push(keys.map(k => esc(r[k])).join(',')));
-  return lines.join('\n');
 }
 
 /* =========================================================
@@ -6120,106 +6029,30 @@ document.getElementById('exportSiteReportDocx').addEventListener('click', ()=>{
   });
 });
 
-// README: CRS, every layer's source URL/retrieval time/status, and the
-// buffer/clipping methodology — so the package is self-describing without
-// needing GroundPatch itself to interpret it later.
-function buildPackageReadme(){
-  const lines = [];
-  lines.push('GROUNDPATCH — ASSESSMENT EXPORT PACKAGE');
-  lines.push('Generated: ' + new Date().toLocaleString());
-  lines.push('');
-  lines.push('SITE');
-  if(boundaryGeom) lines.push(`  Boundary area: ${polygonAreaHa(boundaryGeom).toFixed(2)} ha`);
-  lines.push(`  Assessment buffer (ecology/planning layers): ${ASSESSMENT_BUFFER_KM} km`);
-  lines.push(`  Context buffer (cadastre/context layers): ${CONTEXT_BUFFER_KM*1000} m`);
-  lines.push('');
-  lines.push('COORDINATE REFERENCE SYSTEM');
-  lines.push('  All geometry in this package is WGS84 (EPSG:4326, decimal degrees) —');
-  lines.push('  every source service was queried with outSR=4326, and no reprojection');
-  lines.push('  is applied anywhere in GroundPatch.');
-  lines.push('');
-  lines.push('DATA SOURCES');
-  layers.filter(l=>l.queryStatus).forEach(l=>{
-    const when = l.retrievedAt ? new Date(l.retrievedAt).toLocaleString() : 'unknown';
-    const src = l.url ? `${l.url}${l.id!=null?('/'+l.id):''}` : (l.derived ? `derived from "${l.sourceLayer}"` : 'unknown source');
-    lines.push(`  - ${l.name}`);
-    lines.push(`      Source: ${src}`);
-    lines.push(`      Retrieved: ${when}  |  Status: ${l.queryStatus}`);
-  });
-  lines.push('');
-  lines.push('PROCESSING STEPS');
-  lines.push(`  1. Ecology/planning layers queried against a ${ASSESSMENT_BUFFER_KM}km buffer around the site boundary;`);
-  lines.push(`     cadastre/context-only layers queried against a ${CONTEXT_BUFFER_KM*1000}m buffer instead.`);
-  lines.push('  2. Each layer\'s raw query result is clipped to its own buffer extent.');
-  lines.push('  3. Categorised layers (e.g. GDE Probability, Strahler order) are coloured/grouped by their display field;');
-  lines.push('     line layers that are summarised per named feature are dissolved by name first.');
-  lines.push('');
-  lines.push('See MANIFEST.txt in this package for any layer that returned partial, capped, or failed results —');
-  lines.push('any statistic derived from those layers (areas, counts) should be treated as potentially incomplete.');
-  return lines.join('\n');
-}
-
-// MANIFEST: just the layers that need a second look - nothing for a fully
-// successful layer, so the file stays short on a clean run and prominent
-// on a run that wasn't.
-function buildPackageManifest(){
-  const lines = [];
-  lines.push('GROUNDPATCH — EXPORT MANIFEST (warnings only)');
-  lines.push('Generated: ' + new Date().toLocaleString());
-  lines.push('');
-  const notComplete = layers.filter(l=> l.queryStatus && l.queryStatus !== 'complete');
-  const queried = layers.filter(l=> l.queryStatus);
-  if(!notComplete.length){
-    lines.push(`All ${queried.length} queried layer(s) returned complete results. No known data-completeness issues.`);
-  } else {
-    lines.push(`${notComplete.length} of ${queried.length} queried layer(s) did not return a complete result:`);
-    lines.push('');
-    notComplete.forEach(l=>{
-      lines.push(`  - ${l.name}  [${l.queryStatus.toUpperCase()}]`);
-      if(l.lastGeoJSON){
-        if(l.lastGeoJSON.truncated) lines.push('      Hit the 20,000-feature safety cap — results are incomplete.');
-        if(l.lastGeoJSON.partial) lines.push('      Some data failed to load after retrying — results may be incomplete.');
-        if(l.lastGeoJSON.unpaginatedFallback) lines.push(`      Pagination failed — may be capped at the server's default limit. Reason: ${l.lastGeoJSON.unpaginatedFallbackReason || 'unknown'}`);
-      }
-      if(l.queryStatus === 'failed') lines.push('      Query failed outright — this layer may be missing from the package entirely.');
-    });
-    lines.push('');
-    lines.push('Any area, count, or percentage statistic derived from the layer(s) above should be treated as');
-    lines.push('potentially incomplete, not a confirmed absence/extent.');
-  }
-  return lines.join('\n');
-}
-
-// One-click bundle: boundary, buffer, every queried layer as shapefile +
-// GeoJSON + CSV, the summary report, a README (CRS/sources/retrieval
-// dates/methodology) and a MANIFEST (which layers are incomplete and why)
-// — everything a research file needs in one zip, self-describing enough
-// to hand to someone who's never opened GroundPatch.
-document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
-  const btn = document.getElementById('downloadAllZip');
+// One-click bundle: boundary, buffer, and every queried layer, each as a
+// plain .shp/.shx/.dbf/.prj set (no GeoJSON/CSV/QML/report — those live in
+// the separate report exports and the "View QGIS styling script" button).
+document.getElementById('downloadAllShapefiles').addEventListener('click', async ()=>{
+  const btn = document.getElementById('downloadAllShapefiles');
   const original = btn.textContent;
   btn.disabled = true; btn.textContent = 'Zipping…';
   try{
     const items = [];
     if(boundaryGeom){
       items.push({ name:'site-boundary',
-        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Site boundary' }, geometry: boundaryGeom }] },
-        style:{ color:'#E81717', noCategorize:true, outlineOnly:true } });
+        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Site boundary' }, geometry: boundaryGeom }] } });
     }
     if(assessmentGeom){
       items.push({ name:`assessment-buffer-${ASSESSMENT_BUFFER_KM}km`,
-        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Assessment buffer' }, geometry: assessmentGeom }] },
-        style:{ color:'#000000', noCategorize:true, outlineOnly:true } });
+        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Assessment buffer' }, geometry: assessmentGeom }] } });
     }
     if(contextGeom){
       items.push({ name:`context-buffer-${CONTEXT_BUFFER_KM*1000}m`,
-        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Context buffer' }, geometry: contextGeom }] },
-        style:{ color:'#FFAA00', noCategorize:true, outlineOnly:true } });
+        fc:{ type:'FeatureCollection', features:[{ type:'Feature', properties:{ name:'Context buffer' }, geometry: contextGeom }] } });
     }
     layers.filter(l=>l.lastGeoJSON && l.lastGeoJSON.features.length).forEach(l=>{
       const slug = l.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase();
-      items.push({ name: slug, fc: l.lastGeoJSON, isDataLayer:true,
-        style:{ field:l.field, color:l.color, noCategorize:l.noCategorize, colorMap:l.colorMap, widthMap:l.widthMap, outlineOnly:l.outlineOnly } });
+      items.push({ name: slug, fc: l.lastGeoJSON });
     });
 
     if(items.length === 0){ alert('Nothing to export yet — run "Fetch site data" first.'); return; }
@@ -6228,25 +6061,17 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
     const skipped = [];
     for(const item of items){
       try{
-        masterZip.file(item.name + '/' + item.name + '.geojson', JSON.stringify(item.fc));
-        if(item.isDataLayer) masterZip.file(item.name + '/' + item.name + '.csv', geojsonToCSV(item.fc));
         const normalized = normalizeGeomType(item.fc);
         const parts = buildShapefileParts(normalized);
         masterZip.file(item.name + '/' + item.name + '.shp', parts.shp);
         masterZip.file(item.name + '/' + item.name + '.shx', parts.shx);
         masterZip.file(item.name + '/' + item.name + '.dbf', parts.dbf);
         masterZip.file(item.name + '/' + item.name + '.prj', parts.prj);
-        masterZip.file(item.name + '/' + item.name + '.qml', buildQML(item.fc, item.style));
       }catch(itemErr){
         console.warn('Skipped', item.name, itemErr);
         skipped.push(item.name);
       }
     }
-
-    const reportText = lastReportText;
-    if(reportText) masterZip.file('report.txt', reportText);
-    masterZip.file('README.txt', buildPackageReadme());
-    masterZip.file('MANIFEST.txt', buildPackageManifest());
 
     if(masterZip.file(/.*/).length === 0){
       alert('Could not build any shapefiles — every layer failed. This usually means a geometry issue across the board rather than one bad layer.');
@@ -6254,10 +6079,9 @@ document.getElementById('downloadAllZip').addEventListener('click', async ()=>{
     }
 
     const blob = await masterZip.generateAsync({ type:'blob' });
-    downloadBlob('groundpatch-assessment-package.zip', blob, 'application/zip');
-    showQgisScriptModal();
+    downloadBlob('groundpatch-shapefiles.zip', blob, 'application/zip');
     if(skipped.length){
-      alert('Downloaded — but skipped ' + skipped.length + ' layer(s) that failed to convert: ' + skipped.join(', ') + '. Try their individual Shapefile button below to see the specific error.');
+      alert('Downloaded — but skipped ' + skipped.length + ' layer(s) that failed to convert: ' + skipped.join(', ') + '.');
     }
   }catch(err){
     alert('Could not build the zip (' + err.message + ').');
@@ -6696,8 +6520,8 @@ let aiGisChatHistory = [];        // [{role, content}] - full history resent eac
 let aiGisResultLayers = {};       // layer_id -> { geojson, mapLayerGroup, name }
 
 // Same slugging pattern already used for export filenames elsewhere
-// (geojsonToCSV/exportShapefile callers) - reused here so a layer's AI-GIS
-// id matches what a human would expect from its name, consistently.
+// (the shapefile export's per-layer names) - reused here so a layer's
+// AI-GIS id matches what a human would expect from its name, consistently.
 function aiGisSlug(name){
   return name.replace(/[^a-z0-9]+/gi, '_').toLowerCase();
 }
