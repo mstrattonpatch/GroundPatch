@@ -2896,22 +2896,34 @@ function clipFeatureToBuffer(feature, bufferGeom){
   const gtype = feature.geometry && feature.geometry.type;
   try{
     if(gtype === 'Polygon' || gtype === 'MultiPolygon'){
-      const clipped = turf.intersect(turf.feature(feature.geometry), bufferFeature);
+      // turf.intersect's polygon-clipping can both return a false-negative
+      // null AND throw outright on complex, vertex-dense real-world
+      // polygons (seen with government datasets like SVTM's vegetation
+      // layer and the Biodiversity Values Map's huge background/"no
+      // additional value" class, especially against a many-vertex site
+      // boundary) even when the shapes genuinely overlap. A thrown error
+      // here used to escape straight to this function's outer catch,
+      // which returns the feature completely UNCLIPPED — silently
+      // bypassing every fallback below and reporting that layer's area as
+      // the whole original polygon rather than the part actually on site.
+      // Catching it locally, same as a null return, keeps it on the
+      // bboxClip-retry path instead.
+      let clipped = null;
+      try{ clipped = turf.intersect(turf.feature(feature.geometry), bufferFeature); }
+      catch(e){ clipped = null; }
       if(!clipped){
-        // turf.intersect's polygon-clipping can return a false-negative null
-        // on complex, vertex-dense real-world polygons (seen with government
-        // datasets like SVTM's vegetation layer, especially against the
-        // many-vertex rounded buffer ring) even when the shapes genuinely
-        // overlap. Real-world case this hit: SVTM's "not classified"
-        // catch-all PCT polygon can be enormous (hundreds of km²) — the old
-        // fallback kept it entirely UNCLIPPED whenever intersect failed,
-        // which on a small site reported that PCT's area as thousands of
-        // times the site's actual size. Same fix as the line branch below:
-        // bboxClip first bounds the worst case to the buffer's bounding
-        // box, then retries the real intersect on that now much-simpler
-        // geometry (often succeeds where the original complex polygon
-        // failed) before settling for the bbox-clipped approximation.
-        if(!turf.booleanIntersects(feature, bufferFeature)) return null;
+        // Real-world case this hit: SVTM's "not classified" catch-all PCT
+        // polygon can be enormous (hundreds of km²) — the old fallback
+        // kept it entirely UNCLIPPED whenever intersect failed, which on a
+        // small site reported that PCT's area as thousands of times the
+        // site's actual size. Same fix as the line branch below: bboxClip
+        // first bounds the worst case to the buffer's bounding box, then
+        // retries the real intersect on that now much-simpler geometry
+        // (often succeeds where the original complex polygon failed)
+        // before settling for the bbox-clipped approximation.
+        let mightIntersect = true;
+        try{ mightIntersect = turf.booleanIntersects(feature, bufferFeature); }catch(e){ mightIntersect = true; }
+        if(!mightIntersect) return null;
         try{
           const bufferBbox = turf.bbox(bufferFeature);
           const bboxClipped = turf.bboxClip(turf.feature(feature.geometry), bufferBbox);
