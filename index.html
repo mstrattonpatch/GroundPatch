@@ -2664,14 +2664,40 @@ function dissolveByField(gj, field){
 // not the whole "Fetch site data" run — worth it to ride out a transient
 // blip on a government server rather than forcing the user to click the
 // button again for one layer out of eight.
+// Government ArcGIS Server exports don't reliably follow the GeoJSON spec's
+// ring-winding rule (exterior ring counter-clockwise, hole rings clockwise)
+// — some services emit a hole wound the SAME direction as its exterior
+// ring. Leaflet's canvas renderer fills using the nonzero winding rule,
+// which only recognises a ring as a hole when it's wound the opposite way
+// to its exterior — a same-direction hole paints as solid fill instead of
+// a gap. Real-world case this hit: the Biodiversity Values Map rendering
+// internal cleared tracks/fire trails as filled purple instead of showing
+// them as the gaps they actually are in the source data. turf.rewind
+// normalizes every ring to the correct, spec-compliant direction
+// regardless of what the source service emitted, so this fixes it at the
+// one place every layer's geometry passes through rather than needing it
+// handled per-renderer. No-op on Point/LineString geometry.
+function normalizeRingWinding(gj){
+  if(!gj || !gj.features) return gj;
+  gj.features = gj.features.map(f=>{
+    const gtype = f.geometry && f.geometry.type;
+    if(gtype !== 'Polygon' && gtype !== 'MultiPolygon') return f;
+    try{ return turf.rewind(f, { reverse:false }); }
+    catch(e){ return f; } // malformed geometry — leave as-is rather than drop the feature
+  });
+  return gj;
+}
+
 async function queryLayer(lyr){
+  let gj;
   try{
-    return await attemptQueryLayer(lyr);
+    gj = await attemptQueryLayer(lyr);
   }catch(err){
     console.warn(`${lyr.name}: first attempt failed, retrying once after a short pause.`, err);
     await new Promise(r => setTimeout(r, 1500));
-    return await attemptQueryLayer(lyr);
+    gj = await attemptQueryLayer(lyr);
   }
+  return normalizeRingWinding(gj);
 }
 
 async function attemptQueryLayer(lyr){
