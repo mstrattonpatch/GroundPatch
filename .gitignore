@@ -1,0 +1,4 @@
+# The ODA File Converter binary (DWG import support, see backend/Dockerfile)
+# is distributed from the Open Design Alliance's own site under its own
+# terms, not redistributed through this repo.
+backend/vendor/

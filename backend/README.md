@@ -55,6 +55,7 @@ index.html (existing)          backend/ (this directory)
 └─────────────────────┘        │   - GET  /api/jobs/{id}/layers/{lid}  │
                                 │                              [real]  │
                                 │   - GET  /api/jobs/{id}/project [stub]│
+                                │   - POST /api/cad/import    [real]    │
                                 │                                        │
                                 │ app/planner.py   — AI chat + planning   │
                                 │                    [real, needs        │
@@ -63,10 +64,31 @@ index.html (existing)          backend/ (this directory)
                                 │ app/jobs.py      — job lifecycle       │
                                 │ app/qgis_runtime.py — QGIS boot/thread │
                                 │ app/gis_worker.py— PyQGIS execution    │
+                                │ app/cad_import.py— DWG/DXF import      │
                                 │ app/project_builder.py — .qgz   [stub] │
                                 │ app/storage.py   — job/result storage  │
                                 └──────────────────────────────────────┘
 ```
+
+### CAD drawing import (`POST /api/cad/import`)
+
+Uploads a `.dwg` or `.dxf` file and returns it as a WGS84 GeoJSON
+`FeatureCollection` — see `app/cad_import.py`'s module docstring for how
+(GDAL/OGR's open-source DXF driver, through the same `QgsVectorLayer`
+plumbing every other layer in this backend uses) and why DWG is the hard
+case. Fully working for DXF with nothing extra installed. DWG additionally
+needs the ODA File Converter present on the backend (see
+`backend/Dockerfile`'s "DWG import support" section for how to add it) —
+without it, a `.dwg` upload returns a clear 422 telling the caller to
+export DXF instead, rather than failing silently or crashing.
+
+A closed `LWPOLYLINE`/`POLYLINE` comes back as a `Polygon` (not a
+`LineString` that happens to end where it started); blocks, arcs, circles
+and splines are flattened to ordinary geometry by GDAL automatically. DXF
+carries no CRS of its own, so the caller must say what the drawing's
+coordinates are in (`source_epsg` — a form field alongside the file) — the
+survey CRSes NSW drawings actually use (GDA2020/GDA94 MGA zones 55-57) are
+what index.html's upload dialog offers.
 
 **The AI plans, the GIS engine executes.** The AI (`app/planner.py`, via the
 Anthropic API) turns a natural-language request into a structured JSON

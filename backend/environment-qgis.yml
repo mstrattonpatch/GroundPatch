@@ -23,3 +23,6 @@ dependencies:
       - uvicorn[standard]==0.34.0
       - pydantic==2.10.4
       - anthropic==1.17.0
+      # Needed for FastAPI's UploadFile (multipart/form-data) — the CAD
+      # (DWG/DXF) import endpoint in main.py.
+      - python-multipart==0.0.20

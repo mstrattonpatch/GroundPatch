@@ -16,14 +16,17 @@ is still mocked — Phase 3 (QGIS project generation) hasn't been built yet.
 from __future__ import annotations
 
 import io
+import tempfile
 import zipfile
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from . import jobs, planner
 from .models import (
+    CadImportResponse,
     ChatRequest,
     ChatResponse,
     JobCreateRequest,
@@ -110,6 +113,29 @@ def get_job_layer(job_id: str, layer_id: str) -> LayerFeaturesResponse:
     if geojson is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} has no output layer {layer_id!r}.")
     return LayerFeaturesResponse(layer_id=layer_id, geojson=geojson, mock=False)
+
+
+@app.post("/api/cad/import", response_model=CadImportResponse)
+async def post_cad_import(file: UploadFile = File(...), source_epsg: int = Form(...)) -> CadImportResponse:
+    from .cad_import import CadImportError, import_cad_file
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in (".dwg", ".dxf"):
+        raise HTTPException(status_code=422, detail=f"Unsupported file type {suffix or '(none)'!r} — upload a .dwg or .dxf file.")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        from .qgis_runtime import run_on_qgis_thread
+        result = run_on_qgis_thread(import_cad_file, tmp_path, file.filename, source_epsg)
+    except CadImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    return CadImportResponse(**result)
 
 
 @app.get("/api/jobs/{job_id}/project")

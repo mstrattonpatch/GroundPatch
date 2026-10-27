@@ -1272,9 +1272,21 @@
   <div id="aiLayerPanelBody">
     <div class="ai-upload-row">
       <label class="ai-upload-btn">
-        + Add dataset (.zip shapefile)
-        <input type="file" id="aiDatasetUpload" accept=".zip" style="display:none">
+        + Add dataset (.zip, .dwg, .dxf)
+        <input type="file" id="aiDatasetUpload" accept=".zip,.dwg,.dxf" style="display:none">
       </label>
+      <div style="margin-top:6px;">
+        <label for="aiCadSourceCrs" style="font-size:11px;color:var(--muted,#888);">CAD drawing CRS (.dwg/.dxf only — shapefiles carry their own):</label>
+        <select id="aiCadSourceCrs" style="width:100%;margin-top:2px;font-size:12px;">
+          <option value="7856" selected>GDA2020 / MGA zone 56 (most of NSW)</option>
+          <option value="7855">GDA2020 / MGA zone 55</option>
+          <option value="7857">GDA2020 / MGA zone 57</option>
+          <option value="28356">GDA94 / MGA zone 56</option>
+          <option value="28355">GDA94 / MGA zone 55</option>
+          <option value="28357">GDA94 / MGA zone 57</option>
+          <option value="4326">WGS 84 (longitude/latitude)</option>
+        </select>
+      </div>
       <div id="aiUploadStatus" style="font-size:12px;margin-top:6px;"></div>
     </div>
     <div id="aiLayerTreeList"></div>
@@ -7170,6 +7182,7 @@ document.getElementById('aiSymbologyClose').addEventListener('click', ()=>{
 });
 
 function handleAiDatasetUpload(file){
+  if(/\.(dwg|dxf)$/i.test(file.name)) return handleAiCadUpload(file);
   const statusEl = document.getElementById('aiUploadStatus');
   if(typeof shp === 'undefined'){
     statusEl.innerHTML = '<span class="err">Shapefile support (shp.js) did not load — check network access to cdnjs.</span>';
@@ -7200,6 +7213,39 @@ function handleAiDatasetUpload(file){
     });
   };
   reader.readAsArrayBuffer(file);
+}
+
+// DWG/DXF upload — unlike the shapefile path above, this can't be parsed
+// client-side (DWG is a closed binary format; even DXF needs a real CAD
+// library) so it goes to the backend's /api/cad/import, which reads it
+// through QGIS/GDAL and reprojects it to WGS84 — see cad_import.py. DWG
+// specifically needs the ODA File Converter installed on the backend; the
+// backend returns a clear, specific error (surfaced here as-is) rather
+// than a generic failure if that isn't available yet.
+async function handleAiCadUpload(file){
+  const statusEl = document.getElementById('aiUploadStatus');
+  const sourceEpsg = document.getElementById('aiCadSourceCrs').value;
+  statusEl.textContent = /\.dwg$/i.test(file.name)
+    ? `Converting and parsing ${file.name}… (DWG conversion can take a little longer)`
+    : `Parsing ${file.name}…`;
+  try{
+    const form = new FormData();
+    form.append('file', file, file.name);
+    form.append('source_epsg', sourceEpsg);
+    const resp = await fetch(`${AI_GIS_BACKEND_URL}/api/cad/import`, { method:'POST', body: form });
+    const body = await resp.json();
+    if(!resp.ok) throw new Error(body.detail || `HTTP ${resp.status}`);
+    const gj = body.geojson;
+    if(!gj.features.length){ statusEl.innerHTML = '<span class="err">No usable geometry found in that drawing.</span>'; return; }
+    const baseName = file.name.replace(/\.(dwg|dxf)$/i, '');
+    addAiUploadedLayer(baseName, gj);
+    const skippedNote = body.skipped_empty_geometry ? ` (${body.skipped_empty_geometry} entit${body.skipped_empty_geometry===1?'y':'ies'} skipped — no geometry)` : '';
+    const dwgNote = body.converted_from_dwg ? ' — converted from DWG' : '';
+    statusEl.innerHTML = `<span class="ok">Loaded ${escHtml(file.name)} — ${gj.features.length} feature(s)${dwgNote}${skippedNote}</span>`;
+    renderAiLayerTree();
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${escHtml(err.message)}</span>`;
+  }
 }
 
 function addAiUploadedLayer(name, geojson){

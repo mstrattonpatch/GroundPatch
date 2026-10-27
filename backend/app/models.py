@@ -181,3 +181,16 @@ class ChatResponse(BaseModel):
     job: JobStatusResponse | None = Field(None, description="Present only if a plan was proposed and actually executed this turn.")
     results: JobResultsResponse | None = None
     mock: bool = Field(False, description="True if ANTHROPIC_API_KEY isn't configured and this is a canned fallback reply, not a real model response.")
+
+
+# ---------------------------------------------------------------------------
+# /api/cad/import — DWG/DXF upload, converted (DWG only) and read through
+# GDAL/OGR's DXF driver, reprojected to WGS84. See cad_import.py.
+# ---------------------------------------------------------------------------
+
+class CadImportResponse(BaseModel):
+    geojson: dict[str, Any] = Field(..., description="FeatureCollection, WGS84 (EPSG:4326) - ready for index.html to add as a layer exactly like any queried layer.")
+    feature_count: int
+    skipped_empty_geometry: int = Field(0, description="Entities in the drawing with no usable geometry (e.g. attribute-only blocks) - not an error, just not importable as a map feature.")
+    source_epsg: int = Field(..., description="The CRS the caller told us this drawing's coordinates are in - DXF/DWG carry no CRS of their own.")
+    converted_from_dwg: bool = Field(..., description="True if the upload was a .dwg and went through the ODA File Converter step first.")

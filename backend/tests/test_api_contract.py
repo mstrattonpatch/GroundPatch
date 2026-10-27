@@ -455,3 +455,112 @@ def test_merge_vector_layers_combines_input_with_params_input_ids():
     assert len(layer["features"]) == 2
     names = sorted(f["properties"]["name"] for f in layer["features"])
     assert names == ["base", "overlay"]
+
+
+# ---------------------------------------------------------------------------
+# /api/cad/import — DWG/DXF upload. A hand-written minimal DXF (one closed
+# LWPOLYLINE, one open LINE) in GDA2020 / MGA zone 56 coordinates (EPSG:7856,
+# the same CRS NSW survey drawings and the QGIS DWG/DXF import dialog both
+# default to) — enough to exercise the real GDAL/OGR DXF driver, the
+# CLOSED_LINE_AS_POLYGON option, and the reprojection to WGS84, without
+# needing a real CAD-authored file in the repo.
+# ---------------------------------------------------------------------------
+
+SAMPLE_DXF = """0
+SECTION
+2
+ENTITIES
+0
+LWPOLYLINE
+8
+Building
+90
+4
+70
+1
+10
+378000.0
+20
+6442000.0
+10
+378050.0
+20
+6442000.0
+10
+378050.0
+20
+6442040.0
+10
+378000.0
+20
+6442040.0
+0
+LINE
+8
+Boundary
+10
+377990.0
+20
+6441990.0
+11
+378060.0
+21
+6442050.0
+0
+ENDSEC
+0
+EOF
+"""
+
+
+@requires_qgis
+def test_cad_import_dxf_reprojects_and_closes_polylines():
+    resp = client.post(
+        "/api/cad/import",
+        files={"file": ("test.dxf", SAMPLE_DXF.encode(), "application/dxf")},
+        data={"source_epsg": 7856},
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert body["feature_count"] == 2
+    assert body["skipped_empty_geometry"] == 0
+    assert body["converted_from_dwg"] is False
+    features = body["geojson"]["features"]
+    geom_types = sorted(f["geometry"]["type"] for f in features)
+    # The closed LWPOLYLINE becomes a Polygon (not a LineString that happens
+    # to end where it started); the open LINE stays a LineString.
+    assert geom_types == ["LineString", "Polygon"]
+    # Reprojected out of MGA zone 56 metres into WGS84 lon/lat - should land
+    # on the NSW coast, nowhere near the raw easting/northing values.
+    polygon = next(f for f in features if f["geometry"]["type"] == "Polygon")
+    lon, lat = polygon["geometry"]["coordinates"][0][0]
+    assert 150 < lon < 154
+    assert -34 < lat < -30
+    assert polygon["properties"]["Layer"] == "Building"
+
+
+def test_cad_import_rejects_unsupported_file_type():
+    resp = client.post(
+        "/api/cad/import",
+        files={"file": ("plan.pdf", b"not a cad file", "application/pdf")},
+        data={"source_epsg": 7856},
+    )
+    assert resp.status_code == 422
+    assert ".pdf" in resp.json()["detail"]
+
+
+@requires_qgis
+def test_cad_import_dwg_without_oda_converter_fails_clearly(monkeypatch):
+    """Without the ODA File Converter installed (true in this dev sandbox —
+    see cad_import.py's module docstring for why DWG can't go through the
+    plain DXF path), a .dwg upload must fail with a specific, actionable
+    message - never a bare 500 or a silent misread."""
+    import app.cad_import as cad_import
+    monkeypatch.setattr(cad_import, "_oda_file_converter_path", lambda: None)
+    resp = client.post(
+        "/api/cad/import",
+        files={"file": ("plan.dwg", b"not actually a dwg, just exercising the missing-converter path", "application/octet-stream")},
+        data={"source_epsg": 7856},
+    )
+    assert resp.status_code == 422
+    assert "ODA File Converter" in resp.json()["detail"]
