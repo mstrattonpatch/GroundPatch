@@ -1544,6 +1544,8 @@ let layers = [
     url:"https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Cadastre/MapServer", id:9, on:true },
   { name:"Land Zoning", cat:"planning", color:"#3B5567", field:"SYM_CODE",
     url:"https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/Planning/EPI_Primary_Planning_Layers/MapServer", id:2, on:true },
+  { name:"Minimum Lot Size", cat:"planning", color:"#2C8C99", field:"SYM_CODE",
+    url:"https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/Planning/EPI_Primary_Planning_Layers/MapServer", id:4, on:true },
   { name:"Biodiversity Values Map", cat:"ecology", color:"#B7A3C9", noCategorize:true,
     url:"https://www.lmbc.nsw.gov.au/arcgis/rest/services/BV/BiodiversityValues/MapServer", id:0, on:true },
   { name:"SVTM (Extant PCT)", cat:"ecology", color:"#7A9B5A", field:"PCTName",
@@ -3509,6 +3511,14 @@ async function processLayer(lyr, card){
             // happened to come first.
             const props = f.properties || {};
             rows = `<div><b>LAY_CLASS</b>: ${props.LAY_CLASS ?? '(none)'}</div><div><b>SYM_CODE</b>: ${props.SYM_CODE ?? '(none)'}</div>`;
+          } else if(lyr.name === 'Minimum Lot Size'){
+            // Same issue as Land Zoning above - the one value that actually
+            // matters (LOT_SIZE + its UNITS) isn't near the front of this
+            // service's real field order either.
+            const props = f.properties || {};
+            const size = props.LOT_SIZE;
+            const units = props.UNITS && props.UNITS !== 'NA' ? props.UNITS : '';
+            rows = `<div><b>Minimum lot size</b>: ${size != null ? size + (units ? ' ' + units : '') : '(none)'}</div><div><b>SYM_CODE</b>: ${props.SYM_CODE ?? '(none)'}</div>`;
           } else {
             rows = Object.entries(f.properties||{})
               .filter(([k])=>!/^(shape|objectid)/i.test(k))
