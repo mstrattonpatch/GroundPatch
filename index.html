@@ -5492,8 +5492,20 @@ async function fetchKoalaSightings(){
     statusEl.innerHTML = `<span class="ok">Found ${n} koala sighting${n===1?'':'s'} within the ${ASSESSMENT_BUFFER_KM}km buffer.</span>` +
       (gj.truncated ? '<br><span class="err">Hit the 20,000-feature safety cap — results are incomplete.</span>' : '') +
       (gj.unpaginatedFallback ? `<br><span class="err">Pagination failed — results may be capped at the server's default limit (often 1000). Reason: ${gj.unpaginatedFallbackReason || 'unknown'}</span>` : '') +
-      (n > 0 ? '<br><button class="textbtn" id="viewKoalaTable" style="margin-top:4px;">View table</button>' : '');
-    if(n > 0) document.getElementById('viewKoalaTable').addEventListener('click', ()=> openAttributeTable(lyr));
+      (n > 0 ? '<br><button class="textbtn" id="viewKoalaTable" style="margin-top:4px;">View table</button>' +
+        ' <button class="textbtn" id="exportKoalaShp" style="margin-top:4px;">Export (Shapefile)</button>' : '');
+    if(n > 0){
+      document.getElementById('viewKoalaTable').addEventListener('click', ()=> openAttributeTable(lyr));
+      // Koala sightings has its own standalone fetch button (separate from
+      // "Fetch site data") and isn't part of the main `layers[]` registry,
+      // so it was never covered by either the per-layer export rows or the
+      // "Export all layers (.shp)" button - this is its own export, same
+      // field/colorMap (YEAROBSERV) the map markers and QGIS script use.
+      document.getElementById('exportKoalaShp').addEventListener('click', e=>{
+        exportShapefile(gj, 'koala-sightings-' + new Date().toISOString().slice(0,10),
+          { field: lyr.field, color: lyr.color, colorMap: lyr.colorMap }, e.target);
+      });
+    }
     updateMapLegend();
   }catch(err){
     statusEl.innerHTML = `<span class="err">${err.message}</span>`;
