@@ -2351,7 +2351,15 @@ addressInput.addEventListener('input', ()=>{
         });
       });
     }catch(err){
-      suggestBox.classList.remove('show'); // fail quietly — the Search button still works as a fallback
+      // Used to fail completely silently here (hide the box, nothing
+      // else) on the theory that the Search button is still a working
+      // fallback — but if you're typing and watching for suggestions
+      // rather than clicking Search, a silent failure looks exactly like
+      // "the search doesn't work", with nothing to go on. Surfacing it
+      // inline costs nothing and the Search button is still right there.
+      console.warn('Address suggestion lookup failed:', err);
+      suggestBox.innerHTML = `<div class="sugg-empty">Couldn't fetch suggestions (${escHtml(err.message)}) — try the Search button instead.</div>`;
+      suggestBox.classList.add('show');
     }
   }, 300);
 });
