@@ -1239,6 +1239,13 @@
       <div id="koalaFetchStatus" style="font-size:12px;margin-top:6px;"></div>
     </section>
 
+    <section id="siteCadastreSection" style="display:none;">
+      <h2>Site cadastre</h2>
+      <p class="section-note">Live query for lots intersecting the subject site boundary itself (not the wider context search radius used for the Cadastre (Lot) map layer).</p>
+      <button class="secondary" id="fetchSiteCadastre" style="margin-top:0;">Fetch site cadastre</button>
+      <div id="siteCadastreStatus" style="font-size:12px;margin-top:6px;"></div>
+    </section>
+
     <section>
       <h2>Measure</h2>
       <button class="secondary" id="measureToggleBtn" style="margin-top:0;">Measure distance/area</button>
@@ -1462,6 +1469,7 @@ function updateMapLegend(){
   if(!el) return;
   const activeLayers = layers.filter(l => l.on && l.lastGeoJSON && l.lastGeoJSON.features.length && l.visible !== false);
   if(KOALA_LAYER.lastGeoJSON && KOALA_LAYER.lastGeoJSON.features.length) activeLayers.push(KOALA_LAYER);
+  if(SITE_CADASTRE_LAYER.lastGeoJSON && SITE_CADASTRE_LAYER.lastGeoJSON.features.length) activeLayers.push(SITE_CADASTRE_LAYER);
   if(!boundaryGeom && !activeLayers.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
   const rows = [];
   if(boundaryGeom) rows.push(`<div class="legend-row"><span class="legend-swatch" style="background:#fff;border:1.5px solid #E81717;"></span>Subject Site</div>`);
@@ -1502,7 +1510,10 @@ let CONTEXT_BUFFER_KM = 0.5;
 // CONTEXT_BUFFER_KM value - with that value now changing live via the
 // cadastre radius slider, equality-matching a layer's bufferKm (set once at
 // registry init) would silently break as soon as the slider moved.
-function bufferGeomFor(lyr){ return lyr.cat === 'context' ? contextGeom : assessmentGeom; }
+function bufferGeomFor(lyr){
+  if(lyr.useSiteBoundary) return boundaryGeom;
+  return lyr.cat === 'context' ? contextGeom : assessmentGeom;
+}
 
 /* =========================================================
    CORS proxy — spatialportalarcgis.dpie.nsw.gov.au and lmbc.nsw.gov.au
@@ -3968,6 +3979,13 @@ function onSiteDataFetched(){
   // (independent of "Fetch site data") also needs a fresh buffer.
   document.getElementById('koalaSightingsSection').style.display = 'block';
   document.getElementById('koalaFetchStatus').textContent = '';
+
+  // A new boundary means any previously fetched site-cadastre result is
+  // for the wrong site entirely, not just a stale buffer.
+  document.getElementById('siteCadastreSection').style.display = 'block';
+  document.getElementById('siteCadastreStatus').textContent = '';
+  SITE_CADASTRE_LAYER.lastGeoJSON = null;
+  if(SITE_CADASTRE_LAYER.mapLayerGroup){ map.removeLayer(SITE_CADASTRE_LAYER.mapLayerGroup); SITE_CADASTRE_LAYER.mapLayerGroup = null; }
 }
 
 /* =========================================================
@@ -5522,6 +5540,112 @@ async function fetchKoalaSightings(){
   }
 }
 document.getElementById('fetchKoalaSightings').addEventListener('click', fetchKoalaSightings);
+
+/* =========================================================
+   Site cadastre — which lot(s) actually make up the subject site
+   (queried against boundaryGeom itself via bufferGeomFor's
+   useSiteBoundary flag, not the wider context search-radius buffer the
+   general "Cadastre (Lot)" map layer uses) - for a report needing to
+   state the exact Lot/DP(s) a site comprises, not just show parcels for
+   visual context. A standalone fetch+export mini-feature, same pattern
+   as Koala/Threatened Species sightings, rather than folded into
+   "Fetch site data".
+
+   Deliberately NOT clipped to the site boundary (clipFeatureCollection)
+   - a parcel is a whole legal unit; slicing it to the site's own
+   (possibly imprecise/hand-drawn) boundary would misrepresent the real
+   lot extent. Any lot genuinely intersecting the boundary is returned
+   whole, same as how a human would read "this site comprises Lot X".
+========================================================= */
+const SITE_CADASTRE_LAYER = { name:"Site Cadastre", cat:"context", color:"#FFAA00", useSiteBoundary:true, url: CADASTRE_LOT_URL, id:9 };
+
+async function fetchSiteCadastre(){
+  if(!boundaryGeom){ alert('Load a site boundary first.'); return; }
+  const statusEl = document.getElementById('siteCadastreStatus');
+  const btn = document.getElementById('fetchSiteCadastre');
+  btn.disabled = true;
+  statusEl.textContent = 'Querying…';
+  try{
+    const gj = await queryLayer(SITE_CADASTRE_LAYER);
+    SITE_CADASTRE_LAYER.lastGeoJSON = gj;
+
+    if(SITE_CADASTRE_LAYER.mapLayerGroup) map.removeLayer(SITE_CADASTRE_LAYER.mapLayerGroup);
+    SITE_CADASTRE_LAYER.mapLayerGroup = L.geoJSON(gj, {
+      style:{ color:'#FFAA00', weight:1.5, fill:false },
+      onEachFeature:(f, l)=>{
+        l.on('click', e=>{
+          const popup = L.popup({ maxWidth: 280 })
+            .setLatLng(e.latlng)
+            .setContent(buildCadastrePopup(f, e.latlng))
+            .openOn(map);
+          const el = popup.getElement();
+          const dlBtn = el && el.querySelector('[data-download-parcel]');
+          if(dlBtn) dlBtn.addEventListener('click', ()=>{
+            const fc = { type:'FeatureCollection', features:[f] };
+            const lotLabel = pickCadastreField(f.properties || {}, CADASTRE_FIELD_CANDIDATES.lot) || 'parcel';
+            const planLabel = pickCadastreField(f.properties || {}, CADASTRE_FIELD_CANDIDATES.plan) || '';
+            const filename = 'cadastre-' + [lotLabel, planLabel].filter(Boolean).join('-').replace(/[^a-z0-9-]+/gi,'_').toLowerCase();
+            exportShapefile(fc, filename, { color:'#FFAA00', outlineOnly:true }, dlBtn);
+          });
+        });
+      }
+    }).addTo(map);
+
+    const n = gj.features.length;
+    statusEl.innerHTML = `<span class="ok">Found ${n} lot${n===1?'':'s'} intersecting the site boundary.</span>` +
+      (n > 0 ? '<br><button class="textbtn" id="viewSiteCadastreTable" style="margin-top:4px;">View table</button>' +
+        ' <button class="textbtn" id="exportSiteCadastreXlsx" style="margin-top:4px;">Export (.xlsx)</button>' +
+        ' <button class="textbtn" id="exportSiteCadastreShp" style="margin-top:4px;">Export (Shapefile)</button>' : '');
+    if(n > 0){
+      document.getElementById('viewSiteCadastreTable').addEventListener('click', ()=> openAttributeTable(SITE_CADASTRE_LAYER));
+      document.getElementById('exportSiteCadastreXlsx').addEventListener('click', ()=> exportSiteCadastreXlsx(gj));
+      document.getElementById('exportSiteCadastreShp').addEventListener('click', e=>{
+        exportShapefile(gj, 'site-cadastre-' + new Date().toISOString().slice(0,10), { color:'#FFAA00', outlineOnly:true }, e.target);
+      });
+    }
+    updateMapLegend();
+  }catch(err){
+    statusEl.innerHTML = `<span class="err">${escHtml(err.message)}</span>`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+document.getElementById('fetchSiteCadastre').addEventListener('click', fetchSiteCadastre);
+
+// One row per lot - same field-candidate lookups the identify popup and
+// per-parcel export already use, so the columns match what's shown
+// on-screen rather than dumping the service's raw (unreliable/undocumented)
+// field names.
+function exportSiteCadastreXlsx(gj){
+  const rows = [
+    ['SITE CADASTRE — LOT(S) INTERSECTING THE SUBJECT SITE BOUNDARY'],
+    ['Generated', new Date().toLocaleString()],
+    [],
+    ['Lot', 'Section', 'Plan', 'Plan Type', 'Title Status', 'Locality', 'State', 'Area (ha)'],
+  ];
+  const headerRowIdx = rows.length - 1;
+  gj.features.forEach(f=>{
+    const props = f.properties || {};
+    let areaHa = '';
+    try{ areaHa = +(turf.area(f) / 10000).toFixed(4); }catch(e){ /* leave blank if geometry is too exotic to measure */ }
+    rows.push([
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.lot) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.section) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.plan) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.planType) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.status) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.locality) || '',
+      pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.state) || '',
+      areaHa,
+    ]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:10},{wch:10},{wch:14},{wch:14},{wch:14},{wch:18},{wch:8},{wch:12}];
+  styleHeaderRow(ws, headerRowIdx, rows[headerRowIdx].map(()=> null));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Site Cadastre');
+  XLSX.writeFile(wb, 'site-cadastre-' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
 
 function renderSpeciesSightingsResult(result){
   const el = document.getElementById('speciesSightingsResult');
