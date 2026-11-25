@@ -1720,7 +1720,11 @@ async function fetchLotContainingPoint(pointGeom){
   const gj = await arcgisFetchJSON(withProxy(`${CADASTRE_LOT_URL}/9/query?${params.toString()}`));
   const feats = gj.features || [];
   if(feats.length === 0) throw new Error('Found the address, but no cadastral lot contains that point.');
-  return { geometry: feats[0].geometry, planlabel: feats[0].properties.planlabel };
+  // Keep the full properties (not just the bare plan-number field) so
+  // callers can build the actual "Lot/DP" label (e.g. "3/DP709613") via
+  // cadastreLotLabel() instead of showing the plan number alone.
+  const properties = feats[0].properties;
+  return { geometry: feats[0].geometry, properties, planlabel: cadastreLotLabel(properties) || properties.planlabel };
 }
 
 document.getElementById('runAddressSearch').addEventListener('click', async ()=>{
@@ -1865,7 +1869,7 @@ async function toggleMultiLotSelection(e){
       map.removeLayer(entry.labelMarker);
       selectedLots.delete(key);
     }else{
-      const feature = { type:'Feature', properties:{ planlabel: result.planlabel }, geometry: result.geometry };
+      const feature = { type:'Feature', properties: result.properties, geometry: result.geometry };
       const layer = L.geoJSON(feature.geometry, {
         style:{ color:'#FFAA00', weight:2.5, fillColor:'#FFAA00', fillOpacity:0.18 }
       }).addTo(map);
@@ -1975,12 +1979,7 @@ async function selectLotClickHandler(e){
   statusEl.innerHTML = 'Finding the lot under that point…';
   try{
     const result = await fetchLotContainingPoint({ type:'Point', coordinates:[e.latlng.lng, e.latlng.lat] });
-    // fetchLotContainingPoint() only hands back `geometry` and `planlabel`
-    // (it queries outFields:'*' but only pulls planlabel out of the
-    // response) - buildCadastrePopup()'s other fields still try their
-    // usual candidates against this smaller properties bag and just omit
-    // whatever a bare planlabel can't supply (status/type/locality etc.).
-    const feature = { type:'Feature', properties: { planlabel: result.planlabel }, geometry: result.geometry };
+    const feature = { type:'Feature', properties: result.properties, geometry: result.geometry };
 
     selectLotPreviewLayer = L.geoJSON(feature.geometry, {
       style:{ color:'#FFAA00', weight:2.5, fillColor:'#FFAA00', fillOpacity:0.1 }
@@ -2217,6 +2216,17 @@ function pickCadastreField(props, keys){
   for(const k of keys){ if(props[k] !== undefined && props[k] !== null && props[k] !== '') return props[k]; }
   return null;
 }
+// "Lot/DP" label (e.g. "3/DP709613") used everywhere a cadastre parcel gets
+// a human-readable label — the identify popup header, the click-to-select
+// map tooltip, exported filenames. Centralised so every call site combines
+// lot + section + plan the same way, rather than some showing the plan
+// number alone because they only had a stripped-down properties bag.
+function cadastreLotLabel(props){
+  const lot = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.lot);
+  const section = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.section);
+  const plan = pickCadastreField(props, CADASTRE_FIELD_CANDIDATES.plan);
+  return [lot, section ? ('Sec ' + section) : null, plan].filter(Boolean).join('/') || null;
+}
 function formatDMS(deg){
   const abs = Math.abs(deg);
   const d = Math.floor(abs);
@@ -2239,7 +2249,7 @@ function buildCadastrePopup(feature, latlng, opts){
   let areaM2 = null;
   try{ areaM2 = turf.area(feature); }catch(e){ /* exotic geometry - just skip the computed area row */ }
 
-  const lotLabel = [lot, section ? ('Sec ' + section) : null, plan].filter(Boolean).join('/') || null;
+  const lotLabel = cadastreLotLabel(props);
 
   const rows = [];
   if(status) rows.push(['Parcel Status', status]);
